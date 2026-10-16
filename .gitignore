@@ -1,7 +1,7 @@
 node_modules/
 .expo/
-android/
-ios/
+/android/
+/ios/
 dist/
 *.keystore
 *.jks
@@ -53,5 +53,6 @@ yarn-error.*
 # Local config (API URL) and native build output
 .env
 .env.*
-android/
-ios/
+/android/
+/ios/
+modules/*/android/build/
