@@ -116,6 +116,7 @@ export function createRuntimeDeps(options: {
       start: async (source) => {
         routeSource = source;
         const result = source === "handsfree" ? await AudioRoute.startVoiceRecognition(VR_TIMEOUT_MS) : await AudioRoute.acquireSco(SCO_TIMEOUT_MS);
+        console.log(JSON.stringify({ event: "route", source, ok: result.ok, note: result.note }));
         return result.ok;
       },
       stop: async () => {
@@ -129,10 +130,10 @@ export function createRuntimeDeps(options: {
     service: { start: () => RideService.startService(), stop: () => RideService.stopService() },
     nav: { returnTo: (packageName) => RideService.launchApp(packageName) },
     cues: {
-      start: () => { RideService.playTone("dial", 1000, "call"); },
-      sent: () => { RideService.playTone("ack", 200, "music"); },
-      waiting: () => { RideService.playTone("beep", 120, "music"); },
-      failure: () => { RideService.playTone("error", 600, "music"); },
+      start: () => { console.log(JSON.stringify({ event: "cue", cue: "start", ok: RideService.playTone("dial", 1000, "call") })); },
+      sent: () => { console.log(JSON.stringify({ event: "cue", cue: "sent", ok: RideService.playTone("ack", 200, "music") })); },
+      waiting: () => { console.log(JSON.stringify({ event: "cue", cue: "waiting", ok: RideService.playTone("beep", 120, "music") })); },
+      failure: () => { console.log(JSON.stringify({ event: "cue", cue: "failure", ok: RideService.playTone("error", 600, "music") })); },
     },
     player: {
       play: (urls) =>
@@ -146,7 +147,10 @@ export function createRuntimeDeps(options: {
         }),
       stop: () => { void Speech.stop(); },
     },
-    onState: options.onState,
+    onState: (state) => {
+      console.log(JSON.stringify({ event: "phase", phase: state.phase, source: state.source, failure: state.failure, phoneMic: state.phoneMic }));
+      options.onState(state);
+    },
     log: (event, data) => { console.log(JSON.stringify({ event, ...data })); },
   };
   return { deps, dispose: () => { positions.end(); playback.stop?.(); } };
