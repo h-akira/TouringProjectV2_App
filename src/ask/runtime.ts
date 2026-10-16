@@ -15,6 +15,7 @@ import type { Settings } from "../settings/store";
 import { Deps } from "./controller";
 import { ConversationState } from "./conversation";
 import { FlowState, Source } from "./flow";
+import { ClipPlayer, playClips } from "./playback";
 import { recordingName, recordingsToDelete } from "./recordings";
 
 const RECORDINGS_DIR = `${documentDirectory}recordings/`;
@@ -91,31 +92,6 @@ class PositionTracker {
   }
 }
 
-function playUrls(urls: string[], stopRef: { stop: (() => void) | null }): Promise<void> {
-  return urls.reduce(
-    (chain, url) =>
-      chain.then(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            const player = createAudioPlayer({ uri: url });
-            const finish = (error?: Error) => {
-              sub.remove();
-              player.remove();
-              stopRef.stop = null;
-              if (error) reject(error);
-              else resolve();
-            };
-            const sub = player.addListener("playbackStatusUpdate", (status) => {
-              if (status.didJustFinish) finish();
-            });
-            stopRef.stop = () => { player.pause(); finish(); };
-            player.play();
-          }),
-      ),
-    Promise.resolve(),
-  );
-}
-
 export function createRuntimeDeps(options: {
   settings(): Settings;
   apiKey(): string | null;
@@ -156,7 +132,11 @@ export function createRuntimeDeps(options: {
       waiting: () => { RideService.playTone("beep", 120, "music"); },
       failure: () => { RideService.playTone("error", 600, "music"); },
     },
-    player: { play: (urls) => playUrls(urls, playback), stop: () => playback.stop?.() },
+    player: {
+      play: (urls) =>
+        playClips(urls, { create: (uri) => createAudioPlayer({ uri }) as unknown as ClipPlayer, sleep: (ms) => RideService.sleep(ms) }, playback),
+      stop: () => playback.stop?.(),
+    },
     speech: {
       say: (text) =>
         new Promise<void>((resolve) => {
