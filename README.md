@@ -21,6 +21,8 @@ TouringProjectV2 の Android アプリ（Expo SDK 58・Development Build・expo-
 - 背面で待つ処理に `setTimeout` を使わない（React Native が背面で止める）。`RideService.sleep` を使う。
 - 一巡のあいだはフォアグラウンドサービスを動かす（無いと、画面を消したあと通信と再生が止まる）。
 - 音声は `playsInSilentMode` を指定して鳴らす（指定しないと、マナーモードで再生が黙って無視される）。
+- `setAudioModeAsync` は、内部で `setSpeakerphoneOn()` を呼び、このアプリの出力先を本体のスピーカーに固定してしまう（回答がインカムに届かない）。呼んだ直後に `AudioRoute.releaseSco()` で出力先の指定を消す（`src/ask/runtime.ts`）。呼ぶところを増やすときも同じにする。
+- インカムは音の出だしを落とす。合図は長さを指定できる音（`TONE_SUP_DIAL`・`TONE_DTMF_*`）で長めに鳴らし、開始の合図は録音が始まってから鳴らす。`TONE_PROP_*` は、長さを指定しても約0.16秒で止まる。
 
 ## テスト
 
@@ -40,4 +42,15 @@ npx expo prebuild --platform android --clean
 npx expo run:android --device
 ```
 
-接続キーは、アプリの「設定 → 接続の設定」で入れる（Backend の README の手順で読む）。
+接続キーは、アプリの「設定 → 接続の設定」で入れる（Backend の README の手順で読む）。キーをどこにも表示せずに入れるときは、入力欄を開いた状態で `adb shell input text "$KEY"` で打ち込む。
+
+一度入れたあとは、JS の変更だけなら Metro につなぎ直せばよい（Development Build は USB 越しに Mac の Metro から JS を読む。USB を外すと動かない）。
+
+```sh
+adb reverse tcp:8081 tcp:8081
+npx expo start --dev-client --localhost
+adb shell am start -a android.intent.action.VIEW \
+  -d "exp+touring-v2://expo-development-client/?url=http%3A%2F%2Flocalhost%3A8081" com.touringproject.v2
+```
+
+一巡の状態・合図・経路の結果は、`console.log` の JSON として Metro のログに出る。
