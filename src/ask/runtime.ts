@@ -21,6 +21,8 @@ import { recordingName, recordingsToDelete } from "./recordings";
 const RECORDINGS_DIR = `${documentDirectory}recordings/`;
 const VR_TIMEOUT_MS = 4000;
 const SCO_TIMEOUT_MS = 3000;
+// Intercoms drop the first part of a sound: a 1 s tone is heard as a short blip, so the start cue is longer.
+const START_CUE_MS = 1500;
 
 export async function requestPermissions(): Promise<void> {
   await requestRecordingPermissionsAsync();
@@ -97,7 +99,11 @@ export function createRuntimeDeps(options: {
   apiKey(): string | null;
   onState(state: FlowState): void;
 }): { deps: Deps; dispose(): void } {
-  void setAudioModeAsync({ shouldPlayInBackground: true, playsInSilentMode: true, interruptionMode: "mixWithOthers" });
+  // setAudioModeAsync also calls setSpeakerphoneOn(), which pins this app's output to the phone speaker and keeps
+  // answers off the intercom; clear that right after (releaseSco clears the communication device and the mode).
+  void setAudioModeAsync({ shouldPlayInBackground: true, playsInSilentMode: true, interruptionMode: "mixWithOthers" }).then(() =>
+    AudioRoute.releaseSco(),
+  );
   const recorder = new PcmRecorder();
   const positions = new PositionTracker();
   const playback: { stop: (() => void) | null } = { stop: null };
@@ -130,10 +136,10 @@ export function createRuntimeDeps(options: {
     service: { start: () => RideService.startService(), stop: () => RideService.stopService() },
     nav: { returnTo: (packageName) => RideService.launchApp(packageName) },
     cues: {
-      start: () => { console.log(JSON.stringify({ event: "cue", cue: "start", ok: RideService.playTone("dial", 1000, "call") })); },
-      sent: () => { console.log(JSON.stringify({ event: "cue", cue: "sent", ok: RideService.playTone("ack", 200, "music") })); },
-      waiting: () => { console.log(JSON.stringify({ event: "cue", cue: "waiting", ok: RideService.playTone("beep", 120, "music") })); },
-      failure: () => { console.log(JSON.stringify({ event: "cue", cue: "failure", ok: RideService.playTone("error", 600, "music") })); },
+      start: () => { console.log(JSON.stringify({ event: "cue", cue: "start", ok: RideService.playTone("dial", START_CUE_MS, "call") })); },
+      sent: () => { console.log(JSON.stringify({ event: "cue", cue: "sent", ok: RideService.playTone("ack", 800, "music") })); },
+      waiting: () => { console.log(JSON.stringify({ event: "cue", cue: "waiting", ok: RideService.playTone("beep", 600, "music") })); },
+      failure: () => { console.log(JSON.stringify({ event: "cue", cue: "failure", ok: RideService.playTone("error", 1200, "music") })); },
     },
     player: {
       play: (urls) =>

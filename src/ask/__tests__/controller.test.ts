@@ -66,7 +66,7 @@ test("handsfree happy path returns to nav right after sending", async () => {
   const h = harness({ stopAfterMs: 3000 });
   await h.controller.run("handsfree");
   expect(h.log).toEqual([
-    "svc:start", "loc:begin", "route:handsfree", "cue:start", "rec:start", "rec:stop", "route:stop",
+    "svc:start", "loc:begin", "route:handsfree", "rec:start", "cue:start", "rec:stop", "route:stop",
     "post", "cue:sent", "return:maps", "get", "play:https://audio/1.mp3", "svc:stop",
   ]);
   expect(h.bodies[0]).toEqual({

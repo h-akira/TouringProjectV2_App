@@ -164,7 +164,6 @@ export class AskController {
     d.location.begin();
     const routed = await d.route.start(run.source);
     if (!routed) this.dispatch({ type: "phoneMic", now: d.now() });
-    d.cues.start();
     try {
       await d.recorder.start();
     } catch {
@@ -173,6 +172,8 @@ export class AskController {
       await this.fail("mic", run);
       return null;
     }
+    // After the recorder is running: the rider starts talking on this cue, so nothing said after it is lost.
+    d.cues.start();
     const startedAt = d.now();
     while (this.state.phase === "recording" && this.isCurrent(run) && d.now() - startedAt < RECORD_LIMIT_MS) {
       await d.sleep(TICK_MS);

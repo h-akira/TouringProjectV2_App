@@ -60,11 +60,12 @@ class RideServiceModule : Module() {
     // Short cues. "call" plays on the voice-call stream (heard on the intercom while SCO is up);
     // "music" plays on the media stream (heard over the intercom's A2DP after returning to the nav app).
     Function("playTone") { name: String, durationMs: Int, stream: String ->
+      // Continuous tones only: the TONE_PROP_* tones have a built-in length (~0.16 s) that durationMs cannot extend.
       val tone = when (name) {
         "dial" -> ToneGenerator.TONE_SUP_DIAL
-        "ack" -> ToneGenerator.TONE_PROP_ACK
-        "beep" -> ToneGenerator.TONE_PROP_BEEP
-        else -> ToneGenerator.TONE_SUP_ERROR
+        "ack" -> ToneGenerator.TONE_DTMF_D
+        "beep" -> ToneGenerator.TONE_DTMF_1
+        else -> ToneGenerator.TONE_SUP_BUSY
       }
       val streamType = if (stream == "call") AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
       val generator = try {
