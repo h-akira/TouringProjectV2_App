@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Touring V2",
+    "slug": "touring-v2",
+    "scheme": "trv2",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "com.touringproject.v2",
+      "adaptiveIcon": {
+        "backgroundColor": "#1f4fd1",
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-audio", { "microphonePermission": "質問の録音に使います", "enableBackgroundPlayback": true }],
+      ["expo-location", { "locationWhenInUsePermission": "質問した場所と進行方向を伝えるために使います" }],
+      "./plugins/withHandsfree"
+    ]
+  }
+}
