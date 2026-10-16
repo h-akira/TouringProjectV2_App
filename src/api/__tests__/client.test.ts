@@ -65,3 +65,11 @@ test("checkKey treats 404 as a working key", async () => {
   await expect(client([{ status: 404 }]).api.checkKey()).resolves.toBeUndefined();
   await expect(client([{ status: 403 }]).api.checkKey()).rejects.toMatchObject({ kind: "invalid_key" });
 });
+
+test("a stalled request times out as a network error", async () => {
+  const calls: string[] = [];
+  const hang = (async (url: string) => { calls.push(url); return new Promise<Response>(() => undefined); }) as unknown as typeof fetch;
+  const api = new ApiClient({ baseUrl: "https://api.example", apiKey: "k", userName: "rider01", fetchFn: hang, sleep: async () => undefined, timer: async () => undefined, timeoutMs: 15000 });
+  await expect(api.postAsk({ text: "Q" })).rejects.toMatchObject({ kind: "network" });
+  expect(calls).toHaveLength(1);
+});

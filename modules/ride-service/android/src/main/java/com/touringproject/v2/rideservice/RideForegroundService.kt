@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.util.Log
 
 // Keeps the process alive while an answer is awaited and read out in the background (adr/0004).
 class RideForegroundService : Service() {
@@ -21,11 +22,17 @@ class RideForegroundService : Service() {
       .setSmallIcon(android.R.drawable.ic_btn_speak_now)
       .setOngoing(true)
       .build()
-    startForeground(
-      NOTIFICATION_ID,
-      notification,
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
-    )
+    try {
+      startForeground(
+        NOTIFICATION_ID,
+        notification,
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
+      )
+    } catch (e: RuntimeException) {
+      // Android 14+ throws when the microphone permission is missing; the ask then fails on its own instead of crashing.
+      Log.w("trv2.ride", "startForeground failed", e)
+      stopSelf()
+    }
     return START_NOT_STICKY
   }
 

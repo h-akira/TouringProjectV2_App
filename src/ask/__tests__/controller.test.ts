@@ -21,6 +21,8 @@ type Options = {
   routeOk?: boolean;
   playError?: Error;
   stopAfterMs?: number | null;
+  micAllowed?: boolean;
+  sayGate?: Promise<void>;
 };
 
 function harness(options: Options = {}) {
@@ -42,6 +44,7 @@ function harness(options: Options = {}) {
     },
     settings: () => options.settings ?? SETTINGS,
     apiKey: () => (options.apiKey === undefined ? "key" : options.apiKey),
+    micAllowed: async () => options.micAllowed ?? true,
     api: () => api,
     conversation: new ConversationState(),
     route: { start: async (source) => { log.push(`route:${source}`); return options.routeOk ?? true; }, stop: async () => { log.push("route:stop"); } },
@@ -51,7 +54,7 @@ function harness(options: Options = {}) {
     nav: { returnTo: async (pkg) => { log.push(`return:${pkg}`); return true; } },
     cues: { start: () => log.push("cue:start"), sent: () => log.push("cue:sent"), waiting: () => log.push("cue:waiting"), failure: () => log.push("cue:failure") },
     player: { play: async (urls) => { log.push(`play:${urls.join(",")}`); if (options.playError) throw options.playError; }, stop: () => { log.push("play:stop"); } },
-    speech: { say: async (text) => { log.push(`say:${text}`); }, stop: () => { log.push("say:stop"); } },
+    speech: { say: async (text) => { log.push(`say:${text}`); if (options.sayGate) await options.sayGate; }, stop: () => { log.push("say:stop"); } },
     onState: (s) => { states.push(s); },
     log: () => undefined,
   };
@@ -176,7 +179,7 @@ test("second press stops the recording", async () => {
 test("cancel while recording discards the audio", async () => {
   const h = harness({ stopAfterMs: null });
   const running = h.controller.run("screen");
-  while (h.controller.state.phase !== "recording") await Promise.resolve();
+  while (!h.log.includes("rec:start")) await Promise.resolve();
   h.controller.cancel();
   await running;
   expect(h.log).toContain("rec:cancel");
@@ -210,4 +213,64 @@ test("test_new_run_during_failed_screen_is_not_reset", async () => {
   // The first run's cleanup must not stop the service the second run is using.
   expect(after.slice(0, after.indexOf("play:https://audio/1.mp3"))).not.toContain("svc:stop");
   expect(phase()).toBe("idle");
+});
+
+test("cancel clears the screen and stops the service at once", async () => {
+  const h = harness({ stopAfterMs: 1000, post: () => new Promise<AskAccepted>(() => undefined) });
+  void h.controller.run("screen");
+  while (h.controller.state.phase !== "sending") await Promise.resolve();
+  h.controller.cancel();
+  expect(h.controller.state.phase).toBe("idle");
+  expect(h.log).toContain("svc:stop");
+});
+
+test("an ask cancelled while sending plays no cue and does not return", async () => {
+  let accept!: (a: AskAccepted) => void;
+  const h = harness({ stopAfterMs: 1000, post: () => new Promise<AskAccepted>((r) => { accept = r; }) });
+  const running = h.controller.run("handsfree");
+  while (h.controller.state.phase !== "sending") await Promise.resolve();
+  while (!accept) await Promise.resolve();
+  h.controller.cancel();
+  accept(ACCEPTED);
+  await running;
+  expect(h.log).not.toContain("cue:sent");
+  expect(h.log.some((l) => l.startsWith("return:"))).toBe(false);
+  expect(h.log).not.toContain("get");
+});
+
+test("a busy press goes back to the nav app after the message", async () => {
+  const h = harness({ stopAfterMs: 1000, results: [done({ status: "processing" }), done()] });
+  const running = h.controller.run("handsfree");
+  while (h.controller.state.phase !== "waiting") await Promise.resolve();
+  h.controller.press();
+  await running;
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  expect(h.log.filter((l) => l === "return:maps")).toHaveLength(2);
+  expect(h.log.lastIndexOf("return:maps")).toBeGreaterThan(h.log.indexOf("say:いま応答中です。少し待ってからもう一度お話しください。"));
+});
+
+test("a denied microphone fails without starting the service", async () => {
+  const h = harness({ micAllowed: false });
+  await h.controller.run("handsfree");
+  expect(h.log).toContain("say:録音できませんでした。");
+  expect(h.log).not.toContain("svc:start");
+});
+
+test("an old failure does not act on the next ask", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let failPost = true;
+  const h = harness({ stopAfterMs: 1000, sayGate: gate, post: async () => { if (failPost) throw new ApiError("network"); return ACCEPTED; } });
+  const phase = () => h.controller.state.phase;
+  const first = h.controller.run("screen");
+  while (phase() !== "failed") await Promise.resolve();
+  failPost = false;
+  h.controller.press();
+  while (phase() !== "recording") await Promise.resolve();
+  release();
+  await first;
+  while (phase() !== "idle") await Promise.resolve();
+  const returns = h.log.map((l, i) => [l, i] as const).filter(([l]) => l === "return:maps");
+  expect(returns).toHaveLength(1);
+  expect(returns[0][1]).toBeGreaterThan(h.log.lastIndexOf("post"));
 });

@@ -1,5 +1,5 @@
 // Real implementations of the controller's Deps. Kept thin: the decisions live in controller.ts.
-import { createAudioPlayer, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
+import { createAudioPlayer, getRecordingPermissionsAsync, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import AudioModule from "expo-audio/build/AudioModule";
 import { deleteAsync, documentDirectory, makeDirectoryAsync, readAsStringAsync, readDirectoryAsync } from "expo-file-system/legacy";
 import * as Location from "expo-location";
@@ -107,8 +107,10 @@ export function createRuntimeDeps(options: {
     now: () => Date.now(),
     sleep: (ms) => RideService.sleep(ms),
     settings: options.settings,
+    micAllowed: async () => (await getRecordingPermissionsAsync()).granted,
     apiKey: () => (API_BASE_URL ? options.apiKey() : null),
-    api: (apiKey, userName) => new ApiClient({ baseUrl: API_BASE_URL, apiKey, userName, sleep: (ms) => RideService.sleep(ms) }),
+    api: (apiKey, userName) =>
+      new ApiClient({ baseUrl: API_BASE_URL, apiKey, userName, sleep: (ms) => RideService.sleep(ms), timer: (ms) => RideService.sleep(ms) }),
     conversation: new ConversationState(),
     route: {
       start: async (source) => {

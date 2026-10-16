@@ -23,6 +23,7 @@ export type Deps = {
   sleep(ms: number): Promise<void>;
   settings(): Settings;
   apiKey(): string | null;
+  micAllowed(): Promise<boolean>;
   api(apiKey: string, userName: string): AskApi;
   conversation: ConversationState;
   route: { start(source: Source): Promise<boolean>; stop(): Promise<void> };
@@ -38,6 +39,8 @@ export type Deps = {
 };
 
 type Recording = { audio: string; current: Fix | null; fixes: Fix[] };
+// Per-ask state: an older ask that is still unwinding must not read or change the newer one's.
+type Run = { id: number; source: Source; returned: boolean };
 
 function reasonFor(error: unknown): FailureReason {
   if (error instanceof ApiError) {
@@ -49,9 +52,9 @@ function reasonFor(error: unknown): FailureReason {
 
 export class AskController {
   state: FlowState = IDLE;
-  private cancelled = false;
-  private returned = false;
   private runId = 0;
+  private current: Run | null = null;
+  private serviceRunning = false;
 
   constructor(private readonly deps: Deps) {}
 
@@ -60,7 +63,7 @@ export class AskController {
     if (this.state.phase === "recording") {
       this.stopRecording();
     } else if (isBusy(this.state)) {
-      void this.deps.speech.say(BUSY_MESSAGE);
+      void this.sayBusy();
     } else {
       void this.run("handsfree");
     }
@@ -74,11 +77,15 @@ export class AskController {
     if (this.state.phase === "recording") this.dispatch({ type: "stopRecording", now: this.deps.now() });
   }
 
+  /** The big button: end the current ask now; whatever it is awaiting is ignored when it returns. */
   cancel(): void {
     if (this.state.phase === "idle") return;
-    this.cancelled = true;
+    this.runId += 1;
+    this.current = null;
     this.deps.player.stop();
     this.deps.speech.stop();
+    this.dispatch({ type: "dismiss", now: this.deps.now() });
+    this.stopService();
   }
 
   resetConversation(): void {
@@ -87,36 +94,48 @@ export class AskController {
 
   async run(source: Source): Promise<void> {
     const d = this.deps;
-    const id = ++this.runId;
-    this.cancelled = false;
-    this.returned = false;
+    // A previous ask may still be reading its failure message; the new ask takes over the audio.
+    if (this.state.phase === "failed") d.speech.stop();
+    const run: Run = { id: ++this.runId, source, returned: false };
+    this.current = run;
     this.dispatch({ type: "start", source, now: d.now() });
-    let serviceStarted = false;
     try {
       const apiKey = d.apiKey();
       if (!apiKey) {
-        await this.fail("no_key", id);
+        await this.fail("no_key", run);
         return;
       }
+      if (!(await d.micAllowed())) {
+        await this.fail("mic", run);
+        return;
+      }
+      if (!this.isCurrent(run)) return;
       const settings = d.settings();
       const api = d.api(apiKey, settings.userName);
       d.service.start();
-      serviceStarted = true;
-      const recording = await this.record(source, id);
+      this.serviceRunning = true;
+      const recording = await this.record(run);
       if (recording === null) return;
-      const accepted = await this.send(recording, api, id);
+      const accepted = await this.send(recording, api, run);
       if (accepted === null) return;
-      await this.maybeReturn("sent", settings);
-      const result = await this.waitForAnswer(accepted.askId, api, id);
+      await this.maybeReturn("sent", settings, run);
+      const result = await this.waitForAnswer(accepted.askId, api, run);
       if (result === null) return;
-      await this.speak(result, settings);
+      await this.speak(result, settings, run);
     } finally {
-      // A newer run owns the screen state and the foreground service; leave both to it.
-      if (id === this.runId) {
+      // A newer ask (or a cancel) owns the screen state and the foreground service; leave both to it.
+      if (this.isCurrent(run)) {
+        this.current = null;
         this.dispatch({ type: "dismiss", now: d.now() });
-        if (serviceStarted) d.service.stop();
+        this.stopService();
       }
     }
+  }
+
+  private stopService(): void {
+    if (!this.serviceRunning) return;
+    this.serviceRunning = false;
+    this.deps.service.stop();
   }
 
   private dispatch(event: FlowEvent): void {
@@ -126,14 +145,24 @@ export class AskController {
     this.deps.onState(next);
   }
 
-  private isCurrent(id: number): boolean {
-    return id === this.runId && !this.cancelled;
+  private isCurrent(run: Run): boolean {
+    return run.id === this.runId;
   }
 
-  private async record(source: Source, id: number): Promise<Recording | null> {
+  // The press itself brought this app over the nav app, so go back once the rider has heard the message.
+  private async sayBusy(): Promise<void> {
+    const d = this.deps;
+    const run = this.current;
+    await d.speech.say(BUSY_MESSAGE);
+    if (!run || !this.isCurrent(run) || run.source !== "handsfree" || !run.returned) return;
+    const settings = d.settings();
+    if (settings.returnEnabled && settings.returnApp) await d.nav.returnTo(settings.returnApp.packageName);
+  }
+
+  private async record(run: Run): Promise<Recording | null> {
     const d = this.deps;
     d.location.begin();
-    const routed = await d.route.start(source);
+    const routed = await d.route.start(run.source);
     if (!routed) this.dispatch({ type: "phoneMic", now: d.now() });
     d.cues.start();
     try {
@@ -141,14 +170,14 @@ export class AskController {
     } catch {
       await d.route.stop();
       d.location.end();
-      await this.fail("mic", id);
+      await this.fail("mic", run);
       return null;
     }
     const startedAt = d.now();
-    while (this.state.phase === "recording" && this.isCurrent(id) && d.now() - startedAt < RECORD_LIMIT_MS) {
+    while (this.state.phase === "recording" && this.isCurrent(run) && d.now() - startedAt < RECORD_LIMIT_MS) {
       await d.sleep(TICK_MS);
     }
-    if (!this.isCurrent(id)) {
+    if (!this.isCurrent(run)) {
       await d.recorder.cancel();
       await d.route.stop();
       d.location.end();
@@ -161,7 +190,7 @@ export class AskController {
     } catch {
       await d.route.stop();
       d.location.end();
-      await this.fail("mic", id);
+      await this.fail("mic", run);
       return null;
     }
     await d.route.stop();
@@ -169,7 +198,7 @@ export class AskController {
     return { audio, current, fixes };
   }
 
-  private async send(recording: Recording, api: AskApi, id: number): Promise<AskAccepted | null> {
+  private async send(recording: Recording, api: AskApi, run: Run): Promise<AskAccepted | null> {
     const d = this.deps;
     const body: AskBody = {
       audio: recording.audio,
@@ -177,57 +206,60 @@ export class AskController {
       headingSample: recording.current ? pickHeadingSample(recording.fixes, recording.current) : null,
       conversationId: d.conversation.current(d.now()),
     };
+    let accepted: AskAccepted;
     try {
-      const accepted = await api.postAsk(body);
-      d.conversation.update(accepted.conversationId, accepted.conversationExpiresAt);
-      this.dispatch({ type: "sent", askId: accepted.askId, now: d.now() });
-      d.cues.sent();
-      return accepted;
+      accepted = await api.postAsk(body);
     } catch (error) {
       d.log("post_failed", { kind: error instanceof ApiError ? error.kind : "unknown" });
-      await this.fail(reasonFor(error), id);
+      await this.fail(reasonFor(error), run);
       return null;
     }
+    // The ask exists on the Backend either way, so keep the conversation going even if it was cancelled.
+    d.conversation.update(accepted.conversationId, accepted.conversationExpiresAt);
+    if (!this.isCurrent(run)) return null;
+    this.dispatch({ type: "sent", askId: accepted.askId, now: d.now() });
+    d.cues.sent();
+    return accepted;
   }
 
-  private async waitForAnswer(askId: string, api: AskApi, id: number): Promise<AskResult | null> {
+  private async waitForAnswer(askId: string, api: AskApi, run: Run): Promise<AskResult | null> {
     const d = this.deps;
     let sinceCue = 0;
     const sleep = async (ms: number) => {
       await d.sleep(ms);
       sinceCue += ms;
-      if (sinceCue >= WAITING_CUE_MS) {
+      if (sinceCue >= WAITING_CUE_MS && this.isCurrent(run)) {
         sinceCue = 0;
         d.cues.waiting();
       }
     };
     let outcome: AskResult | "timeout" | "cancelled";
     try {
-      outcome = await pollUntilDone(() => api.getAsk(askId), { sleep, now: d.now, isCancelled: () => !this.isCurrent(id) });
+      outcome = await pollUntilDone(() => api.getAsk(askId), { sleep, now: d.now, isCancelled: () => !this.isCurrent(run) });
     } catch (error) {
-      await this.fail(reasonFor(error), id);
+      await this.fail(reasonFor(error), run);
       return null;
     }
-    if (outcome === "cancelled") return null;
+    if (outcome === "cancelled" || !this.isCurrent(run)) return null;
     if (outcome === "timeout") {
-      await this.fail("timeout", id);
+      await this.fail("timeout", run);
       return null;
     }
     const readable = outcome.status === "completed" || (outcome.error === "tts_failed" && !!outcome.answer);
     if (!readable) {
-      await this.fail(failureFromServer(outcome.error), id);
+      await this.fail(failureFromServer(outcome.error), run);
       return null;
     }
     return outcome;
   }
 
-  private async speak(result: AskResult, settings: Settings): Promise<void> {
+  private async speak(result: AskResult, settings: Settings, run: Run): Promise<void> {
     const d = this.deps;
     this.dispatch({ type: "answered", answer: result.answer ?? "", now: d.now() });
-    await this.maybeReturn("answered", settings);
+    await this.maybeReturn("answered", settings, run);
     const urls = [...result.audio].sort((a, b) => a.seq - b.seq).map((a) => a.url);
     let played = false;
-    if (urls.length > 0) {
+    if (urls.length > 0 && this.isCurrent(run)) {
       try {
         await d.player.play(urls);
         played = true;
@@ -235,32 +267,34 @@ export class AskController {
         d.log("play_failed", { error: String(error) });
       }
     }
-    if (!played && !this.cancelled && result.answer) await d.speech.say(result.answer);
-    if (!this.cancelled) await this.maybeReturn("spoken", settings);
+    if (!played && this.isCurrent(run) && result.answer) await d.speech.say(result.answer);
+    await this.maybeReturn("spoken", settings, run);
   }
 
-  private async maybeReturn(moment: Moment, settings: Settings): Promise<void> {
-    if (this.returned || this.cancelled || !shouldReturnNow(this.state.source, settings, moment)) return;
-    this.returned = true;
+  private async maybeReturn(moment: Moment, settings: Settings, run: Run): Promise<void> {
+    if (run.returned || !this.isCurrent(run) || !shouldReturnNow(run.source, settings, moment)) return;
+    run.returned = true;
     await this.deps.nav.returnTo(settings.returnApp!.packageName);
   }
 
-  private async fail(reason: FailureReason, id: number): Promise<void> {
+  private async fail(reason: FailureReason, run: Run): Promise<void> {
     const d = this.deps;
+    if (!this.isCurrent(run)) return;
     this.dispatch({ type: "fail", reason, now: d.now() });
     d.cues.failure();
     await d.speech.say(spokenMessage(reason));
+    if (!this.isCurrent(run)) return;
     const settings = d.settings();
-    if (this.state.source === "handsfree") {
+    if (run.source === "handsfree") {
       // US-B-04.006: a failed answer still ends with the nav app in front.
-      if (!this.returned && settings.returnEnabled && settings.returnApp) {
-        this.returned = true;
+      if (!run.returned && settings.returnEnabled && settings.returnApp) {
+        run.returned = true;
         await d.nav.returnTo(settings.returnApp.packageName);
       }
       return;
     }
     let waited = 0;
-    while (waited < FAILED_SCREEN_MS && this.isCurrent(id) && this.state.phase === "failed") {
+    while (waited < FAILED_SCREEN_MS && this.isCurrent(run) && this.state.phase === "failed") {
       await d.sleep(TICK_MS);
       waited += TICK_MS;
     }
