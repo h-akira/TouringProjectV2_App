@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { useAsk } from "../ask/AskProvider";
 import { RECORD_LIMIT_MS } from "../ask/controller";
@@ -57,26 +58,29 @@ export function AskOverlay() {
   }
 
   return (
-    <Modal visible animationType="none" statusBarTranslucent>
-      <View style={[styles.root, { backgroundColor: phaseColor(state.phase) }]}>
-        {state.phoneMic && state.phase === "recording" ? (
-          <Text style={styles.warning}>インカムのマイクに繋がっていません（本体のマイクで録音中）</Text>
-        ) : null}
-        <Pressable style={styles.main} onPress={onMain}>
-          <Text style={styles.title}>{title}</Text>
-          {big ? <Text style={styles.big}>{big}</Text> : null}
-          {detail ? <Text style={styles.detail} numberOfLines={8}>{detail}</Text> : null}
-        </Pressable>
-        <Pressable style={styles.button} onPress={() => controller.cancel()}>
-          <Text style={styles.buttonText}>{button}</Text>
-        </Pressable>
-      </View>
+    <Modal visible animationType="none" statusBarTranslucent navigationBarTranslucent>
+      {/* A Modal is its own window: it needs its own provider to know the system bar insets. */}
+      <SafeAreaProvider>
+        <SafeAreaView edges={["top", "bottom", "left", "right"]} style={[styles.root, { backgroundColor: phaseColor(state.phase) }]}>
+          {state.phoneMic && state.phase === "recording" ? (
+            <Text style={styles.warning}>インカムのマイクに繋がっていません（本体のマイクで録音中）</Text>
+          ) : null}
+          <Pressable style={styles.main} onPress={onMain}>
+            <Text style={styles.title}>{title}</Text>
+            {big ? <Text style={styles.big}>{big}</Text> : null}
+            {detail ? <Text style={styles.detail} numberOfLines={8}>{detail}</Text> : null}
+          </Pressable>
+          <Pressable style={styles.button} onPress={() => controller.cancel()}>
+            <Text style={styles.buttonText}>{button}</Text>
+          </Pressable>
+        </SafeAreaView>
+      </SafeAreaProvider>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, padding: 24, paddingTop: 48 },
+  root: { flex: 1, paddingHorizontal: 24, paddingBottom: 24, paddingTop: 16 },
   warning: { backgroundColor: "#f5c518", color: "#000", fontSize: 18, padding: 12, borderRadius: 8, marginBottom: 12 },
   main: { flex: 1, justifyContent: "center", alignItems: "center" },
   title: { color: "#fff", fontSize: 36, fontWeight: "700", textAlign: "center" },
