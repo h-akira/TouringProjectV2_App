@@ -1,6 +1,7 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useAsk } from "../../src/ask/AskProvider";
 import { isBusy } from "../../src/ask/flow";
@@ -59,8 +60,9 @@ export default function Recordings() {
     trialStatus = `録ったマイク: ${micLabel(trialState)}`;
   }
 
+  // The app draws edge to edge: keep the delete button clear of the system navigation bar.
   return (
-    <View style={styles.root}>
+    <SafeAreaView edges={["bottom"]} style={styles.root}>
       <View style={styles.card}>
         <Pressable
           style={[styles.trialButton, trialState.phase === "recording" && styles.trialButtonRecording, busy && !trial.active && styles.disabled]}
@@ -100,7 +102,7 @@ export default function Recordings() {
       <Pressable style={[styles.deleteAll, (busy || trial.active) && styles.disabled]} disabled={busy || trial.active} onPress={confirmDeleteAll}>
         <Text style={styles.deleteAllText}>録音をすべて消す</Text>
       </Pressable>
-    </View>
+    </SafeAreaView>
   );
 }
 
