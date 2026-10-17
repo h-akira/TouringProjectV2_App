@@ -112,7 +112,14 @@ export class AskController {
       if (!this.isCurrent(run)) return;
       const settings = d.settings();
       const api = d.api(apiKey, settings.userName);
-      d.service.start();
+      try {
+        d.service.start();
+      } catch (error) {
+        // Without the foreground service the ask would stall once the screen is off; say so instead (issue #6).
+        d.log("service_failed", { error: String(error) });
+        await this.fail("service", run);
+        return;
+      }
       this.serviceRunning = true;
       const recording = await this.record(run);
       if (recording === null) return;

@@ -12,7 +12,8 @@ export type FailureReason =
   | "network"
   | "invalid_key"
   | "no_key"
-  | "mic";
+  | "mic"
+  | "service";
 
 export type FlowState = {
   phase: Phase;

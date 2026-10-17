@@ -23,6 +23,7 @@ type Options = {
   stopAfterMs?: number | null;
   micAllowed?: boolean;
   sayGate?: Promise<void>;
+  serviceError?: Error;
 };
 
 function harness(options: Options = {}) {
@@ -50,7 +51,7 @@ function harness(options: Options = {}) {
     route: { start: async (source) => { log.push(`route:${source}`); return options.routeOk ?? true; }, stop: async () => { log.push("route:stop"); } },
     recorder: { start: async () => { log.push("rec:start"); }, stop: async () => { log.push("rec:stop"); return "UENN"; }, cancel: async () => { log.push("rec:cancel"); } },
     location: { begin: () => { log.push("loc:begin"); }, end: () => ({ current: HERE, fixes: [BEHIND, HERE] }) },
-    service: { start: () => { log.push("svc:start"); }, stop: () => { log.push("svc:stop"); } },
+    service: { start: () => { log.push("svc:start"); if (options.serviceError) throw options.serviceError; }, stop: () => { log.push("svc:stop"); } },
     nav: { returnTo: async (pkg) => { log.push(`return:${pkg}`); return true; } },
     cues: { start: () => log.push("cue:start"), sent: () => log.push("cue:sent"), waiting: () => log.push("cue:waiting"), failure: () => log.push("cue:failure") },
     player: { play: async (urls) => { log.push(`play:${urls.join(",")}`); if (options.playError) throw options.playError; }, stop: () => { log.push("play:stop"); } },
@@ -280,4 +281,14 @@ test("the chosen answer volume goes with every question", async () => {
   const h = harness({ stopAfterMs: 1000, settings: { ...SETTINGS, answerVolumeDb: 12 } });
   await h.controller.run("handsfree");
   expect(h.bodies[0].volumeDb).toBe(12);
+});
+
+test("a foreground service that cannot start fails out loud", async () => {
+  const h = harness({ serviceError: new Error("ForegroundServiceStartNotAllowedException") });
+  await h.controller.run("handsfree");
+  expect(h.log).toEqual([
+    "svc:start", "cue:failure", "say:準備できなかったため、質問できませんでした。もう一度お試しください。", "return:maps",
+  ]);
+  expect(h.states.some((s) => s.phase === "failed" && s.failure === "service")).toBe(true);
+  expect(h.controller.state.phase).toBe("idle");
 });

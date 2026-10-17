@@ -63,6 +63,7 @@ test("spoken messages", () => {
   expect(spokenMessage("invalid_key")).toBe("接続キーを確かめてください。");
   expect(spokenMessage("no_key")).toBe(spokenMessage("invalid_key"));
   expect(spokenMessage("mic")).toBe("録音できませんでした。");
+  expect(spokenMessage("service")).toBe("準備できなかったため、質問できませんでした。もう一度お試しください。");
   expect(BUSY_MESSAGE).toBe("いま応答中です。少し待ってからもう一度お話しください。");
 });
 

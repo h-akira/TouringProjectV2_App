@@ -13,6 +13,7 @@ const MESSAGES: Record<FailureReason, string> = {
   invalid_key: "接続キーを確かめてください。",
   no_key: "接続キーを確かめてください。",
   mic: "録音できませんでした。",
+  service: "準備できなかったため、質問できませんでした。もう一度お試しください。",
 };
 
 export function spokenMessage(reason: FailureReason): string {
