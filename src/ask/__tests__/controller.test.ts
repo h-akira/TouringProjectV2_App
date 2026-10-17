@@ -10,8 +10,8 @@ const ACCEPTED: AskAccepted = { askId: "a1", conversationId: "c1", conversationE
 const done = (over: Partial<AskResult> = {}): AskResult => ({
   askId: "a1", status: "completed", transcript: "Q", answer: "愛鷹山です。", audio: [{ seq: 1, url: "https://audio/1.mp3" }], error: null, timings: {}, ...over,
 });
-const HERE = { latitude: 35.6812, longitude: 139.7671, timestamp: 100_000 };
-const BEHIND = { latitude: 35.6806, longitude: 139.7671, timestamp: 90_000 };
+const HERE = { latitude: 35.6812, longitude: 139.7671, timestamp: 100_000, accuracy: 5 };
+const BEHIND = { latitude: 35.6806, longitude: 139.7671, timestamp: 90_000, accuracy: 5 };
 
 type Options = {
   apiKey?: string | null;

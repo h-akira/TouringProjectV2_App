@@ -11,6 +11,7 @@ import RideService from "../../modules/ride-service/src";
 import { ApiClient } from "../api/client";
 import { API_BASE_URL } from "../config";
 import { Fix } from "../location/heading";
+import { PositionTracker } from "../location/tracker";
 import type { Settings } from "../settings/store";
 import { Deps } from "./controller";
 import { ConversationState } from "./conversation";
@@ -70,28 +71,20 @@ class PcmRecorder {
   }
 }
 
-class PositionTracker {
-  private fixes: Fix[] = [];
-  private subscription: Location.LocationSubscription | null = null;
+function toFix(p: Location.LocationObject): Fix {
+  return { latitude: p.coords.latitude, longitude: p.coords.longitude, timestamp: p.timestamp, accuracy: p.coords.accuracy ?? null };
+}
 
-  begin(): void {
-    this.fixes = [];
-    void Location.getLastKnownPositionAsync().then((p) => p && this.add(p));
-    void Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 }, (p) => this.add(p))
-      .then((s) => { this.subscription = s; })
-      .catch(() => undefined);
-  }
-
-  end(): { current: Fix | null; fixes: Fix[] } {
-    this.subscription?.remove();
-    this.subscription = null;
-    const fixes = [...this.fixes].sort((a, b) => a.timestamp - b.timestamp);
-    return { current: fixes.length > 0 ? fixes[fixes.length - 1] : null, fixes };
-  }
-
-  private add(p: Location.LocationObject): void {
-    this.fixes.push({ latitude: p.coords.latitude, longitude: p.coords.longitude, timestamp: p.timestamp });
-  }
+function createPositionTracker(): PositionTracker {
+  return new PositionTracker({
+    now: () => Date.now(),
+    lastKnown: async () => {
+      const p = await Location.getLastKnownPositionAsync();
+      return p ? toFix(p) : null;
+    },
+    watch: (onFix) =>
+      Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 }, (p) => onFix(toFix(p))),
+  });
 }
 
 export function createRuntimeDeps(options: {
@@ -105,7 +98,7 @@ export function createRuntimeDeps(options: {
     AudioRoute.releaseSco(),
   );
   const recorder = new PcmRecorder();
-  const positions = new PositionTracker();
+  const positions = createPositionTracker();
   const playback: { stop: (() => void) | null } = { stop: null };
   let routeSource: Source | null = null;
 

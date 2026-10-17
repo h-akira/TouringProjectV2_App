@@ -1,10 +1,17 @@
 // Picks the older point the Backend uses to work out the direction of travel (07 UC-5).
 import { HeadingSample } from "../api/client";
 
-export type Fix = { latitude: number; longitude: number; timestamp: number };
+// accuracy is the radius in metres the device reports (null when unknown).
+export type Fix = { latitude: number; longitude: number; timestamp: number; accuracy: number | null };
 
 export const MIN_SAMPLE_DISTANCE_M = 15;
 export const MAX_SAMPLE_AGE_MS = 60_000;
+// GPS jitter of a stationary phone can exceed MIN_SAMPLE_DISTANCE_M with poor fixes (issue #5).
+export const MAX_ACCURACY_M = 20;
+
+function accurate(f: Fix): boolean {
+  return f.accuracy === null || f.accuracy <= MAX_ACCURACY_M;
+}
 
 export function distanceMeters(a: Fix, b: Fix): number {
   const r = 6_371_000;
@@ -16,8 +23,10 @@ export function distanceMeters(a: Fix, b: Fix): number {
 }
 
 export function pickHeadingSample(fixes: Fix[], current: Fix): HeadingSample | null {
+  if (!accurate(current)) return null;
   const candidates = fixes.filter(
     (f) =>
+      accurate(f) &&
       f.timestamp < current.timestamp &&
       current.timestamp - f.timestamp <= MAX_SAMPLE_AGE_MS &&
       distanceMeters(f, current) >= MIN_SAMPLE_DISTANCE_M,
