@@ -1,11 +1,37 @@
-import { Link, router } from "expo-router";
+import { Link, router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 
+import AudioRoute, { MediaVolume } from "../modules/audio-route/src";
 import { useAsk } from "../src/ask/AskProvider";
 import { conversationLabel } from "../src/ui/conversationLabel";
+import { Banner, BANNER_TEXT, homeBanner, mediaVolumeLow } from "../src/ui/homeBanner";
+
+const VOLUME_CHECK_MS = 2_000;
+
+// The rider may turn the volume down at any time; check while the home screen is in front (foreground-only timer).
+function useMediaVolume(): MediaVolume | null {
+  const [volume, setVolume] = useState<MediaVolume | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      const read = () => setVolume(AudioRoute.getMediaVolume());
+      read();
+      const id = setInterval(read, VOLUME_CHECK_MS);
+      return () => clearInterval(id);
+    }, []),
+  );
+  return volume;
+}
+
+const BANNER_TARGET: Record<Banner, "/settings/connection" | "/settings/return-app" | null> = {
+  no_key: "/settings/connection",
+  no_return_app: "/settings/return-app",
+  low_volume: null,
+};
 
 export default function Home() {
   const { ready, controller, settings, apiKey, conversationExpiresAt } = useAsk();
+  const volume = useMediaVolume();
   if (!ready || !settings || !controller) return <View style={styles.root}><Text>準備中…</Text></View>;
 
   const confirmNewConversation = () =>
@@ -13,6 +39,12 @@ export default function Home() {
       { text: "やめる", style: "cancel" },
       { text: "新しい会話にする", onPress: () => controller.resetConversation() },
     ]);
+  const banner = homeBanner({
+    hasKey: !!apiKey,
+    returnAppMissing: settings.returnEnabled && !settings.returnApp,
+    volumeLow: mediaVolumeLow(volume),
+  });
+  const target = banner ? BANNER_TARGET[banner] : null;
 
   return (
     <View style={styles.root}>
@@ -29,14 +61,9 @@ export default function Home() {
           </Link>
         </View>
       </View>
-      {!apiKey ? (
-        <Pressable style={styles.banner} onPress={() => router.push("/settings/connection")}>
-          <Text style={styles.bannerText}>接続キーが未設定です（押して設定）</Text>
-        </Pressable>
-      ) : null}
-      {settings.returnEnabled && !settings.returnApp ? (
-        <Pressable style={styles.banner} onPress={() => router.push("/settings/return-app")}>
-          <Text style={styles.bannerText}>戻り先のアプリが未設定です（押して選ぶ）</Text>
+      {banner ? (
+        <Pressable style={styles.banner} disabled={!target} onPress={() => target && router.push(target)}>
+          <Text style={styles.bannerText}>{BANNER_TEXT[banner]}</Text>
         </Pressable>
       ) : null}
       <Text style={styles.ready}>インカムのボタンで話せます</Text>
