@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAsk } from "../../src/ask/AskProvider";
 import { VOLUME_DB_CHOICES } from "../../src/settings/store";
 
-// SC-20: how much the Backend raises the answer audio. Takes effect from the next question.
+// SC-21: how much the Backend raises the answer audio. Takes effect from the next question.
 export default function Volume() {
   const { settings, updateSettings } = useAsk();
   if (!settings) return null;

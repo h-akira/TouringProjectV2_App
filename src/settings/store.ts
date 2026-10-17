@@ -1,7 +1,7 @@
 // Settings kept on the device. The connection key lives separately in SecureStore (storage.ts).
 export type ReturnTiming = "sent" | "answered" | "spoken";
 export type LaunchableApp = { packageName: string; label: string };
-// How much the Backend raises the answer audio (SC-20). The Backend accepts exactly these values.
+// How much the Backend raises the answer audio (SC-21). The Backend accepts exactly these values.
 export const VOLUME_DB_CHOICES = [0, 3, 6, 9, 12] as const;
 export type VolumeDb = (typeof VOLUME_DB_CHOICES)[number];
 export const DEFAULT_VOLUME_DB: VolumeDb = 6;
