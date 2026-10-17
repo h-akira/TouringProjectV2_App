@@ -23,14 +23,14 @@ test("first load creates and saves a user name with defaults", async () => {
 
 test("saved settings round trip", async () => {
   const store = new MemoryStore();
-  const settings = { userName: "rider01", returnEnabled: false, returnApp: MAPS, returnTiming: "spoken" as const, recentApps: [MAPS], answerVolumeDb: 12 as const };
+  const settings = { userName: "rider01", returnEnabled: false, returnApp: MAPS, returnTiming: "spoken" as const, recentApps: [MAPS], answerVolumeDb: 3 as const };
   await saveSettings(store, settings);
   expect(await loadSettings(store)).toEqual(settings);
 });
 
 test("broken values fall back to defaults", async () => {
   const store = new MemoryStore();
-  store.data.set("trv2.settings", JSON.stringify({ userName: "BAD NAME", returnTiming: "later", returnApp: { label: 1 }, recentApps: "x", answerVolumeDb: 7 }));
+  store.data.set("trv2.settings", JSON.stringify({ userName: "BAD NAME", returnTiming: "later", returnApp: { label: 1 }, recentApps: "x", answerVolumeDb: 12 }));
   const settings = await loadSettings(store, () => 0.5);
   expect(settings.userName).toMatch(/^[a-z0-9]{6}$/);
   expect(settings.returnTiming).toBe("sent");

@@ -18,7 +18,7 @@ export default function Volume() {
           </Pressable>
         ))}
       </View>
-      <Text style={styles.note}>単位は dB です。+6 でおよそ2倍、+12 でおよそ4倍の大きさです。全体が小さいときは、まずスマホのメディアの音量を上げてください。</Text>
+      <Text style={styles.note}>単位は dB です。+6（最大）で、+0 のおよそ2倍の大きさです。それでも小さいときは、スマホのメディアの音量を上げてください。</Text>
     </View>
   );
 }

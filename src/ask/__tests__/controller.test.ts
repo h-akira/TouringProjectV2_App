@@ -291,9 +291,9 @@ test("an old failure does not act on the next ask", async () => {
 });
 
 test("the chosen answer volume goes with every question", async () => {
-  const h = harness({ stopAfterMs: 1000, settings: { ...SETTINGS, answerVolumeDb: 12 } });
+  const h = harness({ stopAfterMs: 1000, settings: { ...SETTINGS, answerVolumeDb: 3 } });
   await h.controller.run("handsfree");
-  expect(h.bodies[0].volumeDb).toBe(12);
+  expect(h.bodies[0].volumeDb).toBe(3);
 });
 
 test("a foreground service that cannot start fails out loud", async () => {
