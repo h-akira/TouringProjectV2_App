@@ -8,8 +8,11 @@ object PressStore {
   @Volatile var listener: ((Long) -> Unit)? = null
 
   fun record(pressedAt: Long) {
-    val current = listener
-    synchronized(this) { pending = if (current == null) pressedAt else null }
+    val current = synchronized(this) {
+      val l = listener
+      pending = if (l == null) pressedAt else null
+      l
+    }
     current?.invoke(pressedAt)
   }
 
