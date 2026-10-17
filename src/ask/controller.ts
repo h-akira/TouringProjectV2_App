@@ -60,6 +60,8 @@ export class AskController {
   private runId = 0;
   private current: Run | null = null;
   private serviceRunning = false;
+  // "いま応答中です…" being said; the answer waits for it so the two never overlap.
+  private busySpeech: Promise<void> | null = null;
 
   constructor(private readonly deps: Deps) {}
 
@@ -67,6 +69,8 @@ export class AskController {
   press(): void {
     if (this.state.phase === "recording") {
       this.stopRecording();
+    } else if (this.state.phase === "speaking") {
+      // The answer is already being heard; a spoken notice would only talk over it.
     } else if (isBusy(this.state)) {
       void this.sayBusy();
     } else {
@@ -165,7 +169,10 @@ export class AskController {
   private async sayBusy(): Promise<void> {
     const d = this.deps;
     const run = this.current;
-    await d.speech.say(BUSY_MESSAGE);
+    const said = d.speech.say(BUSY_MESSAGE);
+    this.busySpeech = said;
+    await said;
+    if (this.busySpeech === said) this.busySpeech = null;
     if (!run || !this.isCurrent(run) || run.source !== "handsfree" || !run.returned) return;
     const settings = d.settings();
     if (settings.returnEnabled && settings.returnApp) await d.nav.returnTo(settings.returnApp.packageName);
@@ -279,6 +286,7 @@ export class AskController {
     this.dispatch({ type: "answered", answer: result.answer ?? "", now: d.now() });
     await this.maybeReturn("answered", settings, run);
     const urls = [...result.audio].sort((a, b) => a.seq - b.seq).map((a) => a.url);
+    if (this.busySpeech) await this.busySpeech;
     let played = false;
     if (urls.length > 0 && this.isCurrent(run)) {
       try {

@@ -327,3 +327,37 @@ test("what was heard is kept even when the answer fails", async () => {
   await h.controller.run("handsfree");
   expect(h.transcripts).toEqual([["rec-0.pcm", ""]]);
 });
+
+test("the answer waits until the busy message has been said", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const h = harness({ stopAfterMs: 1000, sayGate: gate, results: [done({ status: "processing" }), done()] });
+  const running = h.controller.run("handsfree");
+  while (h.controller.state.phase !== "waiting") await Promise.resolve();
+  h.controller.press();
+  // The answer arrives while "いま応答中です…" is still being said.
+  for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  expect(h.log.some((l) => l.startsWith("play:"))).toBe(false);
+  release();
+  await running;
+  const busy = h.log.indexOf("say:いま応答中です。少し待ってからもう一度お話しください。");
+  expect(busy).toBeGreaterThan(-1);
+  expect(h.log.indexOf("play:https://audio/1.mp3")).toBeGreaterThan(busy);
+});
+
+test("a press while the answer is read out says nothing over it", async () => {
+  let endPlay!: () => void;
+  const h = harness({ stopAfterMs: 1000 });
+  h.deps.player.play = async (urls) => {
+    h.log.push(`play:${urls.join(",")}`);
+    await new Promise<void>((r) => { endPlay = r; });
+  };
+  const running = h.controller.run("handsfree");
+  while (h.controller.state.phase !== "speaking" || !endPlay) await Promise.resolve();
+  h.controller.press();
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  endPlay();
+  await running;
+  expect(h.log.some((l) => l.startsWith("say:"))).toBe(false);
+  expect(h.log.filter((l) => l === "rec:start")).toHaveLength(1);
+});
