@@ -1,7 +1,7 @@
 // Real implementations of the controller's Deps. Kept thin: the decisions live in controller.ts.
 import { createAudioPlayer, getRecordingPermissionsAsync, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import AudioModule from "expo-audio/build/AudioModule";
-import { deleteAsync, readAsStringAsync } from "expo-file-system/legacy";
+import { cacheDirectory, deleteAsync, readAsStringAsync } from "expo-file-system/legacy";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { PermissionsAndroid } from "react-native";
@@ -17,7 +17,8 @@ import { Deps } from "./controller";
 import { ConversationState } from "./conversation";
 import { FlowState, Source } from "./flow";
 import { ClipPlayer, playClips } from "./playback";
-import { newRecordingUri, pruneRecordings, saveMeta, setTranscript } from "./recordingFiles";
+import { newRecordingUri, pruneRecordings, recordingUri, saveMeta, setTranscript, wavFromPcm } from "./recordingFiles";
+import { TrialDeps, TrialState } from "./trial";
 const VR_TIMEOUT_MS = 4000;
 const SCO_TIMEOUT_MS = 3000;
 // Intercoms drop the first part of a sound: a 1 s tone is heard as a short blip, so the start cue is longer.
@@ -109,7 +110,13 @@ export function createRuntimeDeps(options: {
   settings(): Settings;
   apiKey(): string | null;
   onState(state: FlowState): void;
-}): { deps: Deps; dispose(): void } {
+}): {
+  deps: Deps;
+  trialDeps(onState: (state: TrialState) => void): TrialDeps;
+  playRecording(name: string): Promise<void>;
+  stopPlayback(): void;
+  dispose(): void;
+} {
   // setAudioModeAsync also calls setSpeakerphoneOn(), which pins this app's output to the phone speaker and keeps
   // answers off the intercom; clear that right after (releaseSco clears the communication device and the mode).
   void setAudioModeAsync({ shouldPlayInBackground: true, playsInSilentMode: true, interruptionMode: "mixWithOthers" }).then(() =>
@@ -177,5 +184,26 @@ export function createRuntimeDeps(options: {
     },
     log: (event, data) => { console.log(JSON.stringify({ event, ...data })); },
   };
-  return { deps, dispose: () => { positions.end(); playback.stop?.(); } };
+  // SC-12 plays WAV copies; expo-audio cannot play the raw PCM that is kept and sent.
+  const playPcm = async (pcmUri: string, wavName: string) => deps.player.play([await wavFromPcm(pcmUri, wavName)]);
+  const trialStream = new PcmStream();
+  const trialDeps = (onState: (state: TrialState) => void): TrialDeps => ({
+    now: deps.now,
+    sleep: deps.sleep,
+    micAllowed: deps.micAllowed,
+    route: { start: () => deps.route.start("screen"), stop: () => deps.route.stop(), inputDevice: deps.route.inputDevice },
+    recorder: { start: () => trialStream.start(`${cacheDirectory}trial.pcm`), stop: () => trialStream.stop(), cancel: () => trialStream.cancel() },
+    cueStart: deps.cues.start,
+    play: (uri) => playPcm(uri, "trial.wav"),
+    stopPlayback: deps.player.stop,
+    discard: (uri) => deleteAsync(uri, { idempotent: true }),
+    onState,
+  });
+  return {
+    deps,
+    trialDeps,
+    playRecording: (name) => playPcm(recordingUri(name), "recording.wav"),
+    stopPlayback: deps.player.stop,
+    dispose: () => { positions.end(); playback.stop?.(); },
+  };
 }
