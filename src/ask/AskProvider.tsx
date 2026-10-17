@@ -2,7 +2,7 @@ import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, 
 
 import AudioRoute from "../../modules/audio-route/src";
 import Handsfree from "../../modules/handsfree/src";
-import { PressTracker } from "../handsfree/press";
+import { PressGate } from "../handsfree/press";
 import { loadApiKey, deleteApiKey, saveApiKey, settingsStore } from "../settings/storage";
 import { loadSettings, saveSettings, Settings } from "../settings/store";
 import { AskController } from "./controller";
@@ -37,11 +37,9 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const keyRef = useRef<string | null>(null);
   const controllerRef = useRef<AskController | null>(null);
   const runtimeRef = useRef<ReturnType<typeof createRuntimeDeps> | null>(null);
-  const presses = useRef(new PressTracker());
+  const presses = useRef(new PressGate(() => controllerRef.current?.press()));
 
-  const handlePress = useCallback((pressedAt: number) => {
-    if (presses.current.claim(pressedAt, Date.now()) === "new") controllerRef.current?.press();
-  }, []);
+  const handlePress = useCallback((pressedAt: number) => presses.current.offer(pressedAt, Date.now()), []);
 
   useEffect(() => {
     let mounted = true;
@@ -64,6 +62,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
       setReady(true);
       const pending = Handsfree.takePendingPress();
       if (pending !== null) handlePress(pending);
+      presses.current.openGate(Date.now());
     })();
     const pressSub = Handsfree.addListener("onPress", (e) => handlePress(e.pressedAt));
     // The headset dropping SCO during a voice-recognition session is the second press.
