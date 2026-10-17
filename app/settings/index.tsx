@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAsk } from "../../src/ask/AskProvider";
 import { maskKey } from "../../src/settings/store";
 
-function Row({ title, value, href }: { title: string; value: string; href: "/settings/connection" | "/settings/user" | "/settings/return-app" }) {
+function Row({ title, value, href }: { title: string; value: string; href: "/settings/connection" | "/settings/user" | "/settings/return-app" | "/settings/volume" | "/settings/recordings" }) {
   return (
     <Pressable style={styles.row} onPress={() => router.push(href)}>
       <Text style={styles.title}>{title}</Text>
@@ -22,6 +22,8 @@ export default function SettingsIndex() {
       <Row title="接続の設定" value={apiKey ? maskKey(apiKey) : "未設定"} href="/settings/connection" />
       <Row title="ユーザー名" value={settings.userName} href="/settings/user" />
       <Row title="応答後に戻るアプリ" value={returnValue} href="/settings/return-app" />
+      <Row title="回答の音量" value={`+${settings.answerVolumeDb}dB`} href="/settings/volume" />
+      <Row title="録音の確認" value="" href="/settings/recordings" />
     </View>
   );
 }

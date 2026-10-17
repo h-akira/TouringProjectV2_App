@@ -202,6 +202,7 @@ export class AskController {
   private async send(recording: Recording, api: AskApi, run: Run): Promise<AskAccepted | null> {
     const d = this.deps;
     const body: AskBody = {
+      volumeDb: d.settings().answerVolumeDb,
       audio: recording.audio,
       location: recording.current ? { latitude: recording.current.latitude, longitude: recording.current.longitude } : null,
       headingSample: recording.current ? pickHeadingSample(recording.fixes, recording.current) : null,

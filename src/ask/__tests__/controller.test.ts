@@ -5,7 +5,7 @@ import { ConversationState } from "../conversation";
 import { FlowState } from "../flow";
 
 const MAPS = { packageName: "maps", label: "マップ" };
-const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [] };
+const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [], answerVolumeDb: 6 };
 const ACCEPTED: AskAccepted = { askId: "a1", conversationId: "c1", conversationExpiresAt: "2999-01-01T00:00:00.000Z" };
 const done = (over: Partial<AskResult> = {}): AskResult => ({
   askId: "a1", status: "completed", transcript: "Q", answer: "愛鷹山です。", audio: [{ seq: 1, url: "https://audio/1.mp3" }], error: null, timings: {}, ...over,
@@ -70,6 +70,7 @@ test("handsfree happy path returns to nav right after sending", async () => {
     "post", "cue:sent", "return:maps", "get", "play:https://audio/1.mp3", "svc:stop",
   ]);
   expect(h.bodies[0]).toEqual({
+    volumeDb: 6,
     audio: "UENN",
     location: { latitude: 35.6812, longitude: 139.7671 },
     headingSample: { latitude: 35.6806, longitude: 139.7671, at: new Date(90_000).toISOString() },
@@ -273,4 +274,10 @@ test("an old failure does not act on the next ask", async () => {
   const returns = h.log.map((l, i) => [l, i] as const).filter(([l]) => l === "return:maps");
   expect(returns).toHaveLength(1);
   expect(returns[0][1]).toBeGreaterThan(h.log.lastIndexOf("post"));
+});
+
+test("the chosen answer volume goes with every question", async () => {
+  const h = harness({ stopAfterMs: 1000, settings: { ...SETTINGS, answerVolumeDb: 12 } });
+  await h.controller.run("handsfree");
+  expect(h.bodies[0].volumeDb).toBe(12);
 });

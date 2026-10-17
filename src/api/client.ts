@@ -15,6 +15,7 @@ export type AskBody = {
   location?: Point | null;
   headingSample?: HeadingSample | null;
   conversationId?: string | null;
+  volumeDb?: number;
 };
 export type AskAccepted = { askId: string; conversationId: string; conversationExpiresAt: string };
 export type AskResult = {

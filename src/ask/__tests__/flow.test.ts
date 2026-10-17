@@ -3,7 +3,7 @@ import { FlowState, IDLE, isBusy, reduce, shouldReturnNow } from "../flow";
 import { Settings } from "../../settings/store";
 
 const MAPS = { packageName: "maps", label: "マップ" };
-const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [] };
+const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [], answerVolumeDb: 6 };
 
 function run(events: Parameters<typeof reduce>[1][]): FlowState {
   return events.reduce(reduce, IDLE);

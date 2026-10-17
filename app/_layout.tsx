@@ -12,6 +12,8 @@ export default function Layout() {
         <Stack.Screen name="settings/connection" options={{ title: "接続の設定" }} />
         <Stack.Screen name="settings/user" options={{ title: "ユーザー名" }} />
         <Stack.Screen name="settings/return-app" options={{ title: "応答後に戻るアプリ" }} />
+        <Stack.Screen name="settings/volume" options={{ title: "回答の音量" }} />
+        <Stack.Screen name="settings/recordings" options={{ title: "録音の確認" }} />
       </Stack>
       <AskOverlay />
     </AskProvider>
