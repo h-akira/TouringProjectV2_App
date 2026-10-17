@@ -85,6 +85,26 @@ class AudioRouteModule : Module() {
       runCatching { audioManager.clearCommunicationDevice() }
       audioManager.mode = AudioManager.MODE_NORMAL
     }.runOnQueue(Queues.MAIN)
+
+    // Answers and cues play on the media stream; the intercom follows the phone's media volume.
+    Function("getMediaVolume") {
+      mapOf(
+        "current" to audioManager.getStreamVolume(AudioManager.STREAM_MUSIC),
+        "max" to audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+      )
+    }
+
+    // The microphone this app is recording from right now (only our own recordings are visible to us).
+    Function("activeInputDevice") {
+      val device = audioManager.activeRecordingConfigurations.firstNotNullOfOrNull { it.audioDevice }
+        ?: return@Function null
+      val type = when (device.type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "bluetooth"
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "builtin"
+        else -> "other"
+      }
+      mapOf("type" to type, "name" to device.productName.toString())
+    }
   }
 
   // ---------------- intercom button: voice recognition ----------------
@@ -281,7 +301,8 @@ class AudioRouteModule : Module() {
       done(ok, note)
     }
     listener = AudioManager.OnCommunicationDeviceChangedListener { device -> if (device?.type == SCO_TYPE) finish(true, "connected") }
-    am.addOnCommunicationDeviceChangedListener({ it.run() }, listener)
+    // On the main thread like the timeout, so finish() is never entered from two threads at once (issue #4).
+    am.addOnCommunicationDeviceChangedListener(context.mainExecutor, listener)
     onTimeout = Runnable { finish(false, "SCO timeout") }
     main.postDelayed(onTimeout, timeoutMs.toLong())
     val accepted = runCatching { am.setCommunicationDevice(sink) }.getOrDefault(false)
