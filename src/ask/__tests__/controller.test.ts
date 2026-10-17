@@ -3,6 +3,7 @@ import { Settings } from "../../settings/store";
 import { AskApi, AskController, Deps, RECORD_LIMIT_MS } from "../controller";
 import { ConversationState } from "../conversation";
 import { FlowState } from "../flow";
+import { RecordingMeta } from "../recordings";
 
 const MAPS = { packageName: "maps", label: "マップ" };
 const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [], answerVolumeDb: 6 };
@@ -24,12 +25,15 @@ type Options = {
   micAllowed?: boolean;
   sayGate?: Promise<void>;
   serviceError?: Error;
+  device?: { type: "bluetooth" | "builtin" | "other"; name: string } | null;
 };
 
 function harness(options: Options = {}) {
   const log: string[] = [];
   const states: FlowState[] = [];
   const bodies: AskBody[] = [];
+  const metas: RecordingMeta[] = [];
+  const transcripts: [string, string][] = [];
   let now = 0;
   const results = [...(options.results ?? [done()])];
   let controller!: AskController;
@@ -48,8 +52,17 @@ function harness(options: Options = {}) {
     micAllowed: async () => options.micAllowed ?? true,
     api: () => api,
     conversation: new ConversationState(),
-    route: { start: async (source) => { log.push(`route:${source}`); return options.routeOk ?? true; }, stop: async () => { log.push("route:stop"); } },
-    recorder: { start: async () => { log.push("rec:start"); }, stop: async () => { log.push("rec:stop"); return "UENN"; }, cancel: async () => { log.push("rec:cancel"); } },
+    route: {
+      start: async (source) => { log.push(`route:${source}`); return options.routeOk ?? true; },
+      stop: async () => { log.push("route:stop"); },
+      inputDevice: () => (options.device === undefined ? { type: "bluetooth", name: "M1-S PRO" } : options.device),
+    },
+    recorder: {
+      start: async () => { log.push("rec:start"); },
+      stop: async () => { log.push("rec:stop"); return { audio: "UENN", name: "rec-0.pcm" }; },
+      cancel: async () => { log.push("rec:cancel"); },
+    },
+    recordings: { saved: (meta) => { metas.push(meta); }, transcribed: (name, text) => { transcripts.push([name, text]); } },
     location: { begin: () => { log.push("loc:begin"); }, end: () => ({ current: HERE, fixes: [BEHIND, HERE] }) },
     service: { start: () => { log.push("svc:start"); if (options.serviceError) throw options.serviceError; }, stop: () => { log.push("svc:stop"); } },
     nav: { returnTo: async (pkg) => { log.push(`return:${pkg}`); return true; } },
@@ -60,7 +73,7 @@ function harness(options: Options = {}) {
     log: () => undefined,
   };
   controller = new AskController(deps);
-  return { controller, log, states, bodies, deps, now: () => now };
+  return { controller, log, states, bodies, metas, transcripts, deps, now: () => now };
 }
 
 test("handsfree happy path returns to nav right after sending", async () => {
@@ -291,4 +304,26 @@ test("a foreground service that cannot start fails out loud", async () => {
   ]);
   expect(h.states.some((s) => s.phase === "failed" && s.failure === "service")).toBe(true);
   expect(h.controller.state.phase).toBe("idle");
+});
+
+test("the kept recording is described for SC-12", async () => {
+  const h = harness({ stopAfterMs: 3000 });
+  await h.controller.run("handsfree");
+  // "UENN" is 3 bytes of PCM.
+  expect(h.metas).toEqual([
+    { name: "rec-0.pcm", recordedAt: 0, durationMs: 0, phoneMic: false, device: { type: "bluetooth", name: "M1-S PRO" }, transcript: null },
+  ]);
+  expect(h.transcripts).toEqual([["rec-0.pcm", "Q"]]);
+});
+
+test("a phone-mic recording is marked so", async () => {
+  const h = harness({ stopAfterMs: 1000, routeOk: false, device: { type: "builtin", name: "Pixel" } });
+  await h.controller.run("handsfree");
+  expect(h.metas[0]).toMatchObject({ phoneMic: true, device: { type: "builtin", name: "Pixel" } });
+});
+
+test("what was heard is kept even when the answer fails", async () => {
+  const h = harness({ stopAfterMs: 1000, results: [done({ status: "failed", transcript: "", answer: null, audio: [], error: "no_speech" })] });
+  await h.controller.run("handsfree");
+  expect(h.transcripts).toEqual([["rec-0.pcm", ""]]);
 });
