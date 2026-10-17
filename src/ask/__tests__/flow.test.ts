@@ -73,3 +73,10 @@ test("server failure reasons", () => {
   expect(failureFromServer("something_new")).toBe("agent_failed");
   expect(failureFromServer(null)).toBe("agent_failed");
 });
+
+test("the media volume read at the start stays with the ask", () => {
+  expect(IDLE.mediaVolume).toBeNull();
+  const recording = reduce(IDLE, { type: "start", source: "handsfree", now: 1, mediaVolume: { current: 2, max: 25 } });
+  expect(recording.mediaVolume).toEqual({ current: 2, max: 25 });
+  expect(reduce(recording, { type: "stopRecording", now: 2 }).mediaVolume).toEqual({ current: 2, max: 25 });
+});

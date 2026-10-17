@@ -50,6 +50,7 @@ function harness(options: Options = {}) {
     settings: () => options.settings ?? SETTINGS,
     apiKey: () => (options.apiKey === undefined ? "key" : options.apiKey),
     micAllowed: async () => options.micAllowed ?? true,
+    mediaVolume: () => { log.push("vol:read"); return { current: 2, max: 25 }; },
     api: () => api,
     conversation: new ConversationState(),
     route: {
@@ -80,7 +81,7 @@ test("handsfree happy path returns to nav right after sending", async () => {
   const h = harness({ stopAfterMs: 3000 });
   await h.controller.run("handsfree");
   expect(h.log).toEqual([
-    "svc:start", "loc:begin", "route:handsfree", "rec:start", "cue:start", "rec:stop", "route:stop",
+    "vol:read", "svc:start", "loc:begin", "route:handsfree", "rec:start", "cue:start", "rec:stop", "route:stop",
     "post", "cue:sent", "return:maps", "get", "play:https://audio/1.mp3", "svc:stop",
   ]);
   expect(h.bodies[0]).toEqual({
@@ -134,7 +135,7 @@ test("phone mic is flagged when the intercom route fails", async () => {
 test("no key fails with a spoken message and no recording", async () => {
   const h = harness({ apiKey: null });
   await h.controller.run("handsfree");
-  expect(h.log).toEqual(["cue:failure", "say:接続キーを確かめてください。", "return:maps"]);
+  expect(h.log).toEqual(["vol:read", "cue:failure", "say:接続キーを確かめてください。", "return:maps"]);
 });
 
 test("network failure on send", async () => {
@@ -300,7 +301,7 @@ test("a foreground service that cannot start fails out loud", async () => {
   const h = harness({ serviceError: new Error("ForegroundServiceStartNotAllowedException") });
   await h.controller.run("handsfree");
   expect(h.log).toEqual([
-    "svc:start", "cue:failure", "say:準備できなかったため、質問できませんでした。もう一度お試しください。", "return:maps",
+    "vol:read", "svc:start", "cue:failure", "say:準備できなかったため、質問できませんでした。もう一度お試しください。", "return:maps",
   ]);
   expect(h.states.some((s) => s.phase === "failed" && s.failure === "service")).toBe(true);
   expect(h.controller.state.phase).toBe("idle");
@@ -360,4 +361,13 @@ test("a press while the answer is read out says nothing over it", async () => {
   await running;
   expect(h.log.some((l) => l.startsWith("say:"))).toBe(false);
   expect(h.log.filter((l) => l === "rec:start")).toHaveLength(1);
+});
+
+test("the media volume is read before the intercom route takes over", async () => {
+  // While SCO is up, the music stream reports the call device's volume instead.
+  const h = harness({ stopAfterMs: 1000 });
+  await h.controller.run("handsfree");
+  expect(h.log.indexOf("vol:read")).toBeGreaterThan(-1);
+  expect(h.log.indexOf("vol:read")).toBeLessThan(h.log.indexOf("route:handsfree"));
+  expect(h.states[0]).toMatchObject({ phase: "recording", mediaVolume: { current: 2, max: 25 } });
 });

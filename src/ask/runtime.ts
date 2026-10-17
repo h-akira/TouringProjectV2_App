@@ -136,6 +136,13 @@ export function createRuntimeDeps(options: {
     sleep: (ms) => RideService.sleep(ms),
     settings: options.settings,
     micAllowed: async () => (await getRecordingPermissionsAsync()).granted,
+    mediaVolume: () => {
+      try {
+        return AudioRoute.getMediaVolume();
+      } catch {
+        return null;
+      }
+    },
     apiKey: () => (API_BASE_URL ? options.apiKey() : null),
     api: (apiKey, userName) =>
       new ApiClient({ baseUrl: API_BASE_URL, apiKey, userName, sleep: (ms) => RideService.sleep(ms), timer: (ms) => RideService.sleep(ms) }),

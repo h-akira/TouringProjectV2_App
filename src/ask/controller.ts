@@ -1,6 +1,6 @@
 // Orchestrates one ask: record -> send -> (return to nav) -> wait -> speak. All side effects come in through Deps
 // so the whole loop is testable; waits use deps.sleep, which is native in the app (setTimeout stops in the background).
-import type { InputDevice } from "../../modules/audio-route/src";
+import type { InputDevice, MediaVolume } from "../../modules/audio-route/src";
 import { ApiError, AskAccepted, AskBody, AskResult } from "../api/client";
 import type { Settings } from "../settings/store";
 import { Fix, pickHeadingSample } from "../location/heading";
@@ -26,6 +26,7 @@ export type Deps = {
   settings(): Settings;
   apiKey(): string | null;
   micAllowed(): Promise<boolean>;
+  mediaVolume(): MediaVolume | null;
   api(apiKey: string, userName: string): AskApi;
   conversation: ConversationState;
   route: { start(source: Source): Promise<boolean>; stop(): Promise<void>; inputDevice(): InputDevice | null };
@@ -107,7 +108,7 @@ export class AskController {
     if (this.state.phase === "failed") d.speech.stop();
     const run: Run = { id: ++this.runId, source, returned: false };
     this.current = run;
-    this.dispatch({ type: "start", source, now: d.now() });
+    this.dispatch({ type: "start", source, now: d.now(), mediaVolume: d.mediaVolume() });
     try {
       const apiKey = d.apiKey();
       if (!apiKey) {

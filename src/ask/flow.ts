@@ -1,4 +1,5 @@
 // The ask loop as a pure state machine (spec §5.2). Screens, cues and returning to the nav app read this state.
+import type { MediaVolume } from "../../modules/audio-route/src";
 import type { Settings } from "../settings/store";
 
 export type Source = "handsfree" | "screen";
@@ -23,10 +24,12 @@ export type FlowState = {
   failure: FailureReason | null;
   phoneMic: boolean;
   phaseStartedAt: number;
+  // Read when the ask starts, before the intercom route switches the music stream to the call device's volume.
+  mediaVolume: MediaVolume | null;
 };
 
 export type FlowEvent =
-  | { type: "start"; source: Source; now: number }
+  | { type: "start"; source: Source; now: number; mediaVolume?: MediaVolume | null }
   | { type: "phoneMic"; now: number }
   | { type: "stopRecording"; now: number }
   | { type: "sent"; askId: string; now: number }
@@ -35,13 +38,13 @@ export type FlowEvent =
   | { type: "fail"; reason: FailureReason; now: number }
   | { type: "dismiss"; now: number };
 
-export const IDLE: FlowState = { phase: "idle", source: null, askId: null, answer: null, failure: null, phoneMic: false, phaseStartedAt: 0 };
+export const IDLE: FlowState = { phase: "idle", source: null, askId: null, answer: null, failure: null, phoneMic: false, phaseStartedAt: 0, mediaVolume: null };
 
 export function reduce(state: FlowState, event: FlowEvent): FlowState {
   switch (event.type) {
     case "start":
       return state.phase === "idle" || state.phase === "failed"
-        ? { ...IDLE, phase: "recording", source: event.source, phaseStartedAt: event.now }
+        ? { ...IDLE, phase: "recording", source: event.source, phaseStartedAt: event.now, mediaVolume: event.mediaVolume ?? null }
         : state;
     case "phoneMic":
       return state.phase === "recording" ? { ...state, phoneMic: true } : state;

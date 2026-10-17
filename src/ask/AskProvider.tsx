@@ -24,6 +24,9 @@ type AskContext = {
   trialState: TrialState;
   playRecording(name: string): Promise<void>;
   stopPlayback(): void;
+  // The media volume level at which the rider closed the low-volume band; kept until the app is closed.
+  volumeDismissedAt: number | null;
+  dismissVolumeWarning(level: number): void;
 };
 
 const Context = createContext<AskContext | null>(null);
@@ -40,6 +43,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const [apiKey, setApiKeyState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [trialState, setTrialState] = useState<TrialState>(TRIAL_IDLE);
+  const [volumeDismissedAt, dismissVolumeWarning] = useState<number | null>(null);
   const trialRef = useRef<TrialController | null>(null);
   const settingsRef = useRef<Settings | null>(null);
   const keyRef = useRef<string | null>(null);
@@ -117,9 +121,9 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       ready, state, controller: controllerRef.current, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt,
-      trial: trialRef.current, trialState, playRecording, stopPlayback,
+      trial: trialRef.current, trialState, playRecording, stopPlayback, volumeDismissedAt, dismissVolumeWarning,
     }),
-    [ready, state, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt, trialState, playRecording, stopPlayback],
+    [ready, state, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt, trialState, playRecording, stopPlayback, volumeDismissedAt],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

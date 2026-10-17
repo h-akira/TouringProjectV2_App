@@ -5,7 +5,7 @@ import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import AudioRoute, { MediaVolume } from "../modules/audio-route/src";
 import { useAsk } from "../src/ask/AskProvider";
 import { conversationLabel } from "../src/ui/conversationLabel";
-import { Banner, BANNER_TEXT, homeBanner, mediaVolumeLow } from "../src/ui/homeBanner";
+import { Banner, BANNER_TEXT, homeBanner, volumeWarning } from "../src/ui/homeBanner";
 
 const VOLUME_CHECK_MS = 2_000;
 
@@ -30,7 +30,7 @@ const BANNER_TARGET: Record<Banner, "/settings/connection" | "/settings/return-a
 };
 
 export default function Home() {
-  const { ready, controller, settings, apiKey, conversationExpiresAt } = useAsk();
+  const { ready, controller, settings, apiKey, conversationExpiresAt, volumeDismissedAt, dismissVolumeWarning } = useAsk();
   const volume = useMediaVolume();
   if (!ready || !settings || !controller) return <View style={styles.root}><Text>準備中…</Text></View>;
 
@@ -42,7 +42,7 @@ export default function Home() {
   const banner = homeBanner({
     hasKey: !!apiKey,
     returnAppMissing: settings.returnEnabled && !settings.returnApp,
-    volumeLow: mediaVolumeLow(volume),
+    volumeLow: volumeWarning(volume, volumeDismissedAt),
   });
   const target = banner ? BANNER_TARGET[banner] : null;
 
@@ -62,9 +62,16 @@ export default function Home() {
         </View>
       </View>
       {banner ? (
-        <Pressable style={styles.banner} disabled={!target} onPress={() => target && router.push(target)}>
-          <Text style={styles.bannerText}>{BANNER_TEXT[banner]}</Text>
-        </Pressable>
+        <View style={styles.bannerRow}>
+          <Pressable style={styles.bannerMain} disabled={!target} onPress={() => target && router.push(target)}>
+            <Text style={styles.bannerText}>{BANNER_TEXT[banner]}</Text>
+          </Pressable>
+          {banner === "low_volume" && volume ? (
+            <Pressable style={styles.bannerClose} onPress={() => dismissVolumeWarning(volume.current)} accessibilityLabel="閉じる">
+              <Text style={styles.bannerText}>✕</Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : null}
       <Text style={styles.ready}>インカムのボタンで話せます</Text>
       <Pressable style={styles.newConversation} onPress={confirmNewConversation}>
@@ -82,7 +89,9 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: 8 },
   small: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: "#999" },
   smallText: { fontSize: 14 },
-  banner: { backgroundColor: "#f5c518", padding: 12, borderRadius: 8 },
+  bannerRow: { flexDirection: "row", alignItems: "center", backgroundColor: "#f5c518", borderRadius: 8 },
+  bannerMain: { flex: 1, padding: 12 },
+  bannerClose: { paddingHorizontal: 16, paddingVertical: 12 },
   bannerText: { fontSize: 16, color: "#000" },
   ready: { fontSize: 16, color: "#13804a" },
   newConversation: { minHeight: 76, maxHeight: 140, borderRadius: 16, backgroundColor: "#1f4fd1", padding: 16, justifyContent: "center" },

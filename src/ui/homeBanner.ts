@@ -14,6 +14,11 @@ export function mediaVolumeLow(volume: MediaVolume | null): boolean {
   return volume !== null && volume.max > 0 && volume.current * 3 < volume.max;
 }
 
+/** Low, and not dismissed at this very level (a dismissal lasts until the volume changes). */
+export function volumeWarning(volume: MediaVolume | null, dismissedAt: number | null): boolean {
+  return mediaVolumeLow(volume) && volume!.current !== dismissedAt;
+}
+
 export function homeBanner(status: { hasKey: boolean; returnAppMissing: boolean; volumeLow: boolean }): Banner | null {
   if (!status.hasKey) return "no_key";
   if (status.returnAppMissing) return "no_return_app";

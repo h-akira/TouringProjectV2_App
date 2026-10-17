@@ -1,4 +1,4 @@
-import { homeBanner, mediaVolumeLow } from "../homeBanner";
+import { homeBanner, mediaVolumeLow, volumeWarning } from "../homeBanner";
 
 test("media volume below a third of the maximum is low", () => {
   expect(mediaVolumeLow({ current: 2, max: 25 })).toBe(true);
@@ -14,4 +14,12 @@ test("one band at a time, the most important first", () => {
   expect(homeBanner({ hasKey: true, returnAppMissing: true, volumeLow: true })).toBe("no_return_app");
   expect(homeBanner({ hasKey: true, returnAppMissing: false, volumeLow: true })).toBe("low_volume");
   expect(homeBanner({ hasKey: true, returnAppMissing: false, volumeLow: false })).toBeNull();
+});
+
+test("a dismissed warning stays away until the volume changes", () => {
+  expect(volumeWarning({ current: 2, max: 25 }, null)).toBe(true);
+  expect(volumeWarning({ current: 2, max: 25 }, 2)).toBe(false);
+  expect(volumeWarning({ current: 1, max: 25 }, 2)).toBe(true);
+  expect(volumeWarning({ current: 20, max: 25 }, 2)).toBe(false);
+  expect(volumeWarning(null, null)).toBe(false);
 });
