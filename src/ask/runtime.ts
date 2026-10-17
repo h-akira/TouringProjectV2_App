@@ -125,6 +125,10 @@ export function createRuntimeDeps(options: {
   const recorder = new AskRecorder();
   const positions = createPositionTracker();
   const playback: { stop: (() => void) | null } = { stop: null };
+  const clipDeps = { create: (uri: string) => createAudioPlayer({ uri }) as unknown as ClipPlayer, sleep: (ms: number) => RideService.sleep(ms) };
+  // SC-12 has its own handle, so stopping its playback never stops an answer and an answer never takes over its stop.
+  const checkPlayback: { stop: (() => void) | null } = { stop: null };
+  const stopCheckPlayback = () => checkPlayback.stop?.();
   let routeSource: Source | null = null;
 
   const deps: Deps = {
@@ -167,8 +171,7 @@ export function createRuntimeDeps(options: {
       failure: () => { console.log(JSON.stringify({ event: "cue", cue: "failure", ok: RideService.playTone("error", 1200, "music") })); },
     },
     player: {
-      play: (urls) =>
-        playClips(urls, { create: (uri) => createAudioPlayer({ uri }) as unknown as ClipPlayer, sleep: (ms) => RideService.sleep(ms) }, playback),
+      play: (urls) => playClips(urls, clipDeps, playback),
       stop: () => playback.stop?.(),
     },
     speech: {
@@ -185,7 +188,7 @@ export function createRuntimeDeps(options: {
     log: (event, data) => { console.log(JSON.stringify({ event, ...data })); },
   };
   // SC-12 plays WAV copies; expo-audio cannot play the raw PCM that is kept and sent.
-  const playPcm = async (pcmUri: string, wavName: string) => deps.player.play([await wavFromPcm(pcmUri, wavName)]);
+  const playPcm = async (pcmUri: string, wavName: string) => playClips([await wavFromPcm(pcmUri, wavName)], clipDeps, checkPlayback);
   const trialStream = new PcmStream();
   const trialDeps = (onState: (state: TrialState) => void): TrialDeps => ({
     now: deps.now,
@@ -195,7 +198,7 @@ export function createRuntimeDeps(options: {
     recorder: { start: () => trialStream.start(`${cacheDirectory}trial.pcm`), stop: () => trialStream.stop(), cancel: () => trialStream.cancel() },
     cueStart: deps.cues.start,
     play: (uri) => playPcm(uri, "trial.wav"),
-    stopPlayback: deps.player.stop,
+    stopPlayback: stopCheckPlayback,
     discard: (uri) => deleteAsync(uri, { idempotent: true }),
     onState,
   });
@@ -203,7 +206,7 @@ export function createRuntimeDeps(options: {
     deps,
     trialDeps,
     playRecording: (name) => playPcm(recordingUri(name), "recording.wav"),
-    stopPlayback: deps.player.stop,
-    dispose: () => { positions.end(); playback.stop?.(); },
+    stopPlayback: stopCheckPlayback,
+    dispose: () => { positions.end(); playback.stop?.(); stopCheckPlayback(); },
   };
 }

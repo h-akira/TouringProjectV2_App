@@ -32,7 +32,8 @@ function playClip(url: string, deps: PlaybackDeps, stopRef: { stop: (() => void)
       settled = true;
       sub.remove();
       player.remove();
-      stopRef.stop = null;
+      // Another playback may have taken over stopRef meanwhile; its stop must stay reachable.
+      if (stopRef.stop === stop) stopRef.stop = null;
       if (error) reject(error);
       else resolve();
     };
@@ -44,11 +45,12 @@ function playClip(url: string, deps: PlaybackDeps, stopRef: { stop: (() => void)
         idleMs = 0;
       }
     });
-    stopRef.stop = () => {
+    const stop = () => {
       session.stopped = true;
       player.pause();
       finish();
     };
+    stopRef.stop = stop;
     player.play();
     void (async () => {
       while (!settled) {

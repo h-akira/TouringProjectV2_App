@@ -49,7 +49,11 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const presses = useRef(
     new PressGate(() => {
       if (trialRef.current?.active) trialRef.current.stop();
-      else controllerRef.current?.press();
+      else {
+        // A kept recording playing on SC-12 would be picked up by the microphone.
+        runtimeRef.current?.stopPlayback();
+        controllerRef.current?.press();
+      }
     }),
   );
 
