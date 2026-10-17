@@ -1,5 +1,6 @@
 // Orchestrates one ask: record -> send -> (return to nav) -> wait -> speak. All side effects come in through Deps
 // so the whole loop is testable; waits use deps.sleep, which is native in the app (setTimeout stops in the background).
+import type { InputDevice, MediaVolume } from "../../modules/audio-route/src";
 import { ApiError, AskAccepted, AskBody, AskResult } from "../api/client";
 import type { Settings } from "../settings/store";
 import { Fix, pickHeadingSample } from "../location/heading";
@@ -7,6 +8,7 @@ import { ConversationState } from "./conversation";
 import { BUSY_MESSAGE, failureFromServer, spokenMessage } from "./failures";
 import { FailureReason, FlowEvent, FlowState, IDLE, isBusy, Moment, reduce, shouldReturnNow, Source } from "./flow";
 import { pollUntilDone } from "./polling";
+import { base64Bytes, pcmDurationMs, RecordingMeta } from "./recordings";
 
 export const RECORD_LIMIT_MS = 20_000;
 export const TICK_MS = 250;
@@ -24,10 +26,14 @@ export type Deps = {
   settings(): Settings;
   apiKey(): string | null;
   micAllowed(): Promise<boolean>;
+  mediaVolume(): MediaVolume | null;
   api(apiKey: string, userName: string): AskApi;
   conversation: ConversationState;
-  route: { start(source: Source): Promise<boolean>; stop(): Promise<void> };
-  recorder: { start(): Promise<void>; stop(): Promise<string>; cancel(): Promise<void> };
+  route: { start(source: Source): Promise<boolean>; stop(): Promise<void>; inputDevice(): InputDevice | null };
+  // stop() returns the PCM as base64 and the name of the file it stays in (spec §5.4).
+  recorder: { start(): Promise<void>; stop(): Promise<{ audio: string; name: string }>; cancel(): Promise<void> };
+  // What SC-12 shows about each kept recording. Fire and forget: a failure here must not end the ask.
+  recordings: { saved(meta: RecordingMeta): void; transcribed(name: string, transcript: string): void };
   location: { begin(): void; end(): { current: Fix | null; fixes: Fix[] } };
   service: { start(): void; stop(): void };
   nav: { returnTo(packageName: string): Promise<boolean> };
@@ -38,7 +44,7 @@ export type Deps = {
   log(event: string, data?: Record<string, unknown>): void;
 };
 
-type Recording = { audio: string; current: Fix | null; fixes: Fix[] };
+type Recording = { audio: string; name: string; current: Fix | null; fixes: Fix[] };
 // Per-ask state: an older ask that is still unwinding must not read or change the newer one's.
 type Run = { id: number; source: Source; returned: boolean };
 
@@ -55,6 +61,8 @@ export class AskController {
   private runId = 0;
   private current: Run | null = null;
   private serviceRunning = false;
+  // "いま応答中です…" being said; the answer waits for it so the two never overlap.
+  private busySpeech: Promise<void> | null = null;
 
   constructor(private readonly deps: Deps) {}
 
@@ -62,6 +70,8 @@ export class AskController {
   press(): void {
     if (this.state.phase === "recording") {
       this.stopRecording();
+    } else if (this.state.phase === "speaking") {
+      // The answer is already being heard; a spoken notice would only talk over it.
     } else if (isBusy(this.state)) {
       void this.sayBusy();
     } else {
@@ -98,7 +108,7 @@ export class AskController {
     if (this.state.phase === "failed") d.speech.stop();
     const run: Run = { id: ++this.runId, source, returned: false };
     this.current = run;
-    this.dispatch({ type: "start", source, now: d.now() });
+    this.dispatch({ type: "start", source, now: d.now(), mediaVolume: d.mediaVolume() });
     try {
       const apiKey = d.apiKey();
       if (!apiKey) {
@@ -112,14 +122,21 @@ export class AskController {
       if (!this.isCurrent(run)) return;
       const settings = d.settings();
       const api = d.api(apiKey, settings.userName);
-      d.service.start();
+      try {
+        d.service.start();
+      } catch (error) {
+        // Without the foreground service the ask would stall once the screen is off; say so instead (issue #6).
+        d.log("service_failed", { error: String(error) });
+        await this.fail("service", run);
+        return;
+      }
       this.serviceRunning = true;
       const recording = await this.record(run);
       if (recording === null) return;
       const accepted = await this.send(recording, api, run);
       if (accepted === null) return;
       await this.maybeReturn("sent", settings, run);
-      const result = await this.waitForAnswer(accepted.askId, api, run);
+      const result = await this.waitForAnswer(accepted.askId, recording.name, api, run);
       if (result === null) return;
       await this.speak(result, settings, run);
     } finally {
@@ -153,7 +170,10 @@ export class AskController {
   private async sayBusy(): Promise<void> {
     const d = this.deps;
     const run = this.current;
-    await d.speech.say(BUSY_MESSAGE);
+    const said = d.speech.say(BUSY_MESSAGE);
+    this.busySpeech = said;
+    await said;
+    if (this.busySpeech === said) this.busySpeech = null;
     if (!run || !this.isCurrent(run) || run.source !== "handsfree" || !run.returned) return;
     const settings = d.settings();
     if (settings.returnEnabled && settings.returnApp) await d.nav.returnTo(settings.returnApp.packageName);
@@ -184,10 +204,13 @@ export class AskController {
       d.location.end();
       return null;
     }
+    // Read while the recorder still runs: the system only reports the input device of an active recording.
+    const device = d.route.inputDevice();
+    const phoneMic = this.state.phoneMic;
     this.stopRecording();
-    let audio: string;
+    let stopped: { audio: string; name: string };
     try {
-      audio = await d.recorder.stop();
+      stopped = await d.recorder.stop();
     } catch {
       await d.route.stop();
       d.location.end();
@@ -195,13 +218,17 @@ export class AskController {
       return null;
     }
     await d.route.stop();
+    d.recordings.saved({
+      name: stopped.name, recordedAt: startedAt, durationMs: pcmDurationMs(base64Bytes(stopped.audio)), phoneMic, device, transcript: null,
+    });
     const { current, fixes } = d.location.end();
-    return { audio, current, fixes };
+    return { audio: stopped.audio, name: stopped.name, current, fixes };
   }
 
   private async send(recording: Recording, api: AskApi, run: Run): Promise<AskAccepted | null> {
     const d = this.deps;
     const body: AskBody = {
+      volumeDb: d.settings().answerVolumeDb,
       audio: recording.audio,
       location: recording.current ? { latitude: recording.current.latitude, longitude: recording.current.longitude } : null,
       headingSample: recording.current ? pickHeadingSample(recording.fixes, recording.current) : null,
@@ -223,7 +250,7 @@ export class AskController {
     return accepted;
   }
 
-  private async waitForAnswer(askId: string, api: AskApi, run: Run): Promise<AskResult | null> {
+  private async waitForAnswer(askId: string, recordingName: string, api: AskApi, run: Run): Promise<AskResult | null> {
     const d = this.deps;
     let sinceCue = 0;
     const sleep = async (ms: number) => {
@@ -241,6 +268,7 @@ export class AskController {
       await this.fail(reasonFor(error), run);
       return null;
     }
+    if (typeof outcome === "object" && outcome.transcript !== null) d.recordings.transcribed(recordingName, outcome.transcript);
     if (outcome === "cancelled" || !this.isCurrent(run)) return null;
     if (outcome === "timeout") {
       await this.fail("timeout", run);
@@ -259,6 +287,7 @@ export class AskController {
     this.dispatch({ type: "answered", answer: result.answer ?? "", now: d.now() });
     await this.maybeReturn("answered", settings, run);
     const urls = [...result.audio].sort((a, b) => a.seq - b.seq).map((a) => a.url);
+    if (this.busySpeech) await this.busySpeech;
     let played = false;
     if (urls.length > 0 && this.isCurrent(run)) {
       try {

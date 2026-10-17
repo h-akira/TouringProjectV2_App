@@ -17,25 +17,26 @@ test("random user name is 6 lowercase letters or digits", () => {
 test("first load creates and saves a user name with defaults", async () => {
   const store = new MemoryStore();
   const settings = await loadSettings(store, () => 0);
-  expect(settings).toEqual({ userName: "aaaaaa", returnEnabled: true, returnApp: null, returnTiming: "sent", recentApps: [] });
+  expect(settings).toEqual({ userName: "aaaaaa", returnEnabled: true, returnApp: null, returnTiming: "sent", recentApps: [], answerVolumeDb: 6 });
   expect(JSON.parse(store.data.get("trv2.settings")!).userName).toBe("aaaaaa");
 });
 
 test("saved settings round trip", async () => {
   const store = new MemoryStore();
-  const settings = { userName: "rider01", returnEnabled: false, returnApp: MAPS, returnTiming: "spoken" as const, recentApps: [MAPS] };
+  const settings = { userName: "rider01", returnEnabled: false, returnApp: MAPS, returnTiming: "spoken" as const, recentApps: [MAPS], answerVolumeDb: 3 as const };
   await saveSettings(store, settings);
   expect(await loadSettings(store)).toEqual(settings);
 });
 
 test("broken values fall back to defaults", async () => {
   const store = new MemoryStore();
-  store.data.set("trv2.settings", JSON.stringify({ userName: "BAD NAME", returnTiming: "later", returnApp: { label: 1 }, recentApps: "x" }));
+  store.data.set("trv2.settings", JSON.stringify({ userName: "BAD NAME", returnTiming: "later", returnApp: { label: 1 }, recentApps: "x", answerVolumeDb: 12 }));
   const settings = await loadSettings(store, () => 0.5);
   expect(settings.userName).toMatch(/^[a-z0-9]{6}$/);
   expect(settings.returnTiming).toBe("sent");
   expect(settings.returnApp).toBeNull();
   expect(settings.recentApps).toEqual([]);
+  expect(settings.answerVolumeDb).toBe(6);
 });
 
 test("not JSON falls back to defaults", async () => {

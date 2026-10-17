@@ -3,7 +3,7 @@ import { FlowState, IDLE, isBusy, reduce, shouldReturnNow } from "../flow";
 import { Settings } from "../../settings/store";
 
 const MAPS = { packageName: "maps", label: "マップ" };
-const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [] };
+const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [], answerVolumeDb: 6 };
 
 function run(events: Parameters<typeof reduce>[1][]): FlowState {
   return events.reduce(reduce, IDLE);
@@ -63,6 +63,7 @@ test("spoken messages", () => {
   expect(spokenMessage("invalid_key")).toBe("接続キーを確かめてください。");
   expect(spokenMessage("no_key")).toBe(spokenMessage("invalid_key"));
   expect(spokenMessage("mic")).toBe("録音できませんでした。");
+  expect(spokenMessage("service")).toBe("準備できなかったため、質問できませんでした。もう一度お試しください。");
   expect(BUSY_MESSAGE).toBe("いま応答中です。少し待ってからもう一度お話しください。");
 });
 
@@ -71,4 +72,11 @@ test("server failure reasons", () => {
   expect(failureFromServer("tts_failed")).toBe("tts_failed");
   expect(failureFromServer("something_new")).toBe("agent_failed");
   expect(failureFromServer(null)).toBe("agent_failed");
+});
+
+test("the media volume read at the start stays with the ask", () => {
+  expect(IDLE.mediaVolume).toBeNull();
+  const recording = reduce(IDLE, { type: "start", source: "handsfree", now: 1, mediaVolume: { current: 2, max: 25 } });
+  expect(recording.mediaVolume).toEqual({ current: 2, max: 25 });
+  expect(reduce(recording, { type: "stopRecording", now: 2 }).mediaVolume).toEqual({ current: 2, max: 25 });
 });

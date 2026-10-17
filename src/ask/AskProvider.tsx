@@ -2,12 +2,13 @@ import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, 
 
 import AudioRoute from "../../modules/audio-route/src";
 import Handsfree from "../../modules/handsfree/src";
-import { PressTracker } from "../handsfree/press";
+import { PressGate } from "../handsfree/press";
 import { loadApiKey, deleteApiKey, saveApiKey, settingsStore } from "../settings/storage";
 import { loadSettings, saveSettings, Settings } from "../settings/store";
 import { AskController } from "./controller";
 import { FlowState, IDLE } from "./flow";
 import { createRuntimeDeps, requestPermissions } from "./runtime";
+import { TRIAL_IDLE, TrialController, TrialState } from "./trial";
 
 type AskContext = {
   ready: boolean;
@@ -18,6 +19,14 @@ type AskContext = {
   apiKey: string | null;
   setApiKey(key: string | null): Promise<void>;
   conversationExpiresAt: number | null;
+  // SC-12
+  trial: TrialController | null;
+  trialState: TrialState;
+  playRecording(name: string): Promise<void>;
+  stopPlayback(): void;
+  // The media volume level at which the rider closed the low-volume band; kept until the app is closed.
+  volumeDismissedAt: number | null;
+  dismissVolumeWarning(level: number): void;
 };
 
 const Context = createContext<AskContext | null>(null);
@@ -33,15 +42,26 @@ export function AskProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [apiKey, setApiKeyState] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [trialState, setTrialState] = useState<TrialState>(TRIAL_IDLE);
+  const [volumeDismissedAt, dismissVolumeWarning] = useState<number | null>(null);
+  const trialRef = useRef<TrialController | null>(null);
   const settingsRef = useRef<Settings | null>(null);
   const keyRef = useRef<string | null>(null);
   const controllerRef = useRef<AskController | null>(null);
   const runtimeRef = useRef<ReturnType<typeof createRuntimeDeps> | null>(null);
-  const presses = useRef(new PressTracker());
+  // While a trial recording runs, the intercom button ends it instead of starting a question (US-E-03.002).
+  const presses = useRef(
+    new PressGate(() => {
+      if (trialRef.current?.active) trialRef.current.stop();
+      else {
+        // A kept recording playing on SC-12 would be picked up by the microphone.
+        runtimeRef.current?.stopPlayback();
+        controllerRef.current?.press();
+      }
+    }),
+  );
 
-  const handlePress = useCallback((pressedAt: number) => {
-    if (presses.current.claim(pressedAt, Date.now()) === "new") controllerRef.current?.press();
-  }, []);
+  const handlePress = useCallback((pressedAt: number) => presses.current.offer(pressedAt, Date.now()), []);
 
   useEffect(() => {
     let mounted = true;
@@ -61,13 +81,18 @@ export function AskProvider({ children }: { children: ReactNode }) {
       });
       runtimeRef.current = runtime;
       controllerRef.current = new AskController(runtime.deps);
+      trialRef.current = new TrialController(runtime.trialDeps(setTrialState));
       setReady(true);
       const pending = Handsfree.takePendingPress();
       if (pending !== null) handlePress(pending);
+      presses.current.openGate(Date.now());
     })();
     const pressSub = Handsfree.addListener("onPress", (e) => handlePress(e.pressedAt));
     // The headset dropping SCO during a voice-recognition session is the second press.
-    const endSub = AudioRoute.addListener("onVoiceRecognitionEnded", () => controllerRef.current?.stopRecording());
+    const endSub = AudioRoute.addListener("onVoiceRecognitionEnded", () => {
+      if (trialRef.current?.active) trialRef.current.stop();
+      else controllerRef.current?.stopRecording();
+    });
     return () => {
       mounted = false;
       pressSub.remove();
@@ -89,10 +114,16 @@ export function AskProvider({ children }: { children: ReactNode }) {
     else await deleteApiKey();
   }, []);
 
+  const playRecording = useCallback(async (name: string) => { await runtimeRef.current?.playRecording(name); }, []);
+  const stopPlayback = useCallback(() => runtimeRef.current?.stopPlayback(), []);
+
   const conversationExpiresAt = runtimeRef.current?.deps.conversation.expiresAt(Date.now()) ?? null;
   const value = useMemo(
-    () => ({ ready, state, controller: controllerRef.current, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt }),
-    [ready, state, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt],
+    () => ({
+      ready, state, controller: controllerRef.current, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt,
+      trial: trialRef.current, trialState, playRecording, stopPlayback, volumeDismissedAt, dismissVolumeWarning,
+    }),
+    [ready, state, settings, updateSettings, apiKey, setApiKey, conversationExpiresAt, trialState, playRecording, stopPlayback, volumeDismissedAt],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

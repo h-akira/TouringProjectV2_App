@@ -78,3 +78,21 @@ test("stop ends playback without starting the next clip", async () => {
   expect(s.players[0].removed).toBe(true);
   expect(s.players).toHaveLength(1);
 });
+
+test("a clip that ends after another one started does not take away the newer one's stop", async () => {
+  const s = setup();
+  // The stall watchdog is not under test here: its sleep never ends.
+  const deps = { ...s.deps, sleep: () => new Promise<void>(() => undefined) };
+  const older = playClips(["old"], deps, s.stopRef);
+  await flush();
+  const newer = playClips(["new"], deps, s.stopRef);
+  await flush();
+  const newerStop = s.stopRef.stop;
+  s.players[0].emit({ didJustFinish: true });
+  await older;
+  expect(s.stopRef.stop).toBe(newerStop);
+  expect(s.stopRef.stop).not.toBeNull();
+  s.stopRef.stop?.();
+  await newer;
+  expect(s.players[1].removed).toBe(true);
+});

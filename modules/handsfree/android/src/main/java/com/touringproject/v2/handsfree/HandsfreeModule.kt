@@ -8,8 +8,14 @@ class HandsfreeModule : Module() {
     Name("Handsfree")
     Events("onPress")
 
-    OnCreate {
+    // Only while JS actually listens: after Back the module outlives the React tree, and a press sent then would be
+    // lost instead of waiting in PressStore for takePendingPress().
+    OnStartObserving("onPress") {
       PressStore.listener = { pressedAt -> sendEvent("onPress", mapOf("pressedAt" to pressedAt.toDouble())) }
+    }
+
+    OnStopObserving("onPress") {
+      PressStore.listener = null
     }
 
     OnDestroy {

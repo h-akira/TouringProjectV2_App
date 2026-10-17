@@ -1,12 +1,17 @@
 // Settings kept on the device. The connection key lives separately in SecureStore (storage.ts).
 export type ReturnTiming = "sent" | "answered" | "spoken";
 export type LaunchableApp = { packageName: string; label: string };
+// How much the Backend raises the answer audio (SC-21). The Backend accepts exactly these values; Polly stops at +6 dB.
+export const VOLUME_DB_CHOICES = [0, 3, 6] as const;
+export type VolumeDb = (typeof VOLUME_DB_CHOICES)[number];
+export const DEFAULT_VOLUME_DB: VolumeDb = 6;
 export type Settings = {
   userName: string;
   returnEnabled: boolean;
   returnApp: LaunchableApp | null;
   returnTiming: ReturnTiming;
   recentApps: LaunchableApp[];
+  answerVolumeDb: VolumeDb;
 };
 
 export interface KeyValueStore {
@@ -51,6 +56,7 @@ export async function loadSettings(store: KeyValueStore, random: () => number = 
     returnApp: isApp(raw.returnApp) ? raw.returnApp : null,
     returnTiming: TIMINGS.includes(raw.returnTiming as ReturnTiming) ? (raw.returnTiming as ReturnTiming) : "sent",
     recentApps: Array.isArray(raw.recentApps) ? raw.recentApps.filter(isApp) : [],
+    answerVolumeDb: VOLUME_DB_CHOICES.includes(raw.answerVolumeDb as VolumeDb) ? (raw.answerVolumeDb as VolumeDb) : DEFAULT_VOLUME_DB,
   };
   if (userName === null) await saveSettings(store, settings);
   return settings;

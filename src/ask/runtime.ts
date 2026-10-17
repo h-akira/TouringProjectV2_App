@@ -1,7 +1,7 @@
 // Real implementations of the controller's Deps. Kept thin: the decisions live in controller.ts.
 import { createAudioPlayer, getRecordingPermissionsAsync, requestRecordingPermissionsAsync, setAudioModeAsync } from "expo-audio";
 import AudioModule from "expo-audio/build/AudioModule";
-import { deleteAsync, documentDirectory, makeDirectoryAsync, readAsStringAsync, readDirectoryAsync } from "expo-file-system/legacy";
+import { cacheDirectory, deleteAsync, readAsStringAsync } from "expo-file-system/legacy";
 import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { PermissionsAndroid } from "react-native";
@@ -11,14 +11,14 @@ import RideService from "../../modules/ride-service/src";
 import { ApiClient } from "../api/client";
 import { API_BASE_URL } from "../config";
 import { Fix } from "../location/heading";
+import { PositionTracker } from "../location/tracker";
 import type { Settings } from "../settings/store";
 import { Deps } from "./controller";
 import { ConversationState } from "./conversation";
 import { FlowState, Source } from "./flow";
 import { ClipPlayer, playClips } from "./playback";
-import { recordingName, recordingsToDelete } from "./recordings";
-
-const RECORDINGS_DIR = `${documentDirectory}recordings/`;
+import { newRecordingUri, pruneRecordings, recordingUri, saveMeta, setTranscript, wavFromPcm } from "./recordingFiles";
+import { TrialDeps, TrialState } from "./trial";
 const VR_TIMEOUT_MS = 4000;
 const SCO_TIMEOUT_MS = 3000;
 // Intercoms drop the first part of a sound: a 1 s tone is heard as a short blip, so the start cue is longer.
@@ -33,26 +33,25 @@ export async function requestPermissions(): Promise<void> {
   ] as Parameters<typeof PermissionsAndroid.requestMultiple>[0]);
 }
 
-class PcmRecorder {
+// 16 kHz mono 16-bit PCM into a file (adr/0002). Shared by questions and the trial recording on SC-12.
+export class PcmStream {
   private stream: InstanceType<typeof AudioModule.AudioStream> | null = null;
 
-  async start(): Promise<void> {
-    await makeDirectoryAsync(RECORDINGS_DIR, { intermediates: true });
+  async start(uri: string): Promise<void> {
     const stream = new AudioModule.AudioStream({ sampleRate: 16000, channels: 1, encoding: "int16" });
     await stream.start();
-    await stream.startFileRecordingAsync({ uri: `${RECORDINGS_DIR}${recordingName(Date.now())}`, format: "pcm" });
+    await stream.startFileRecordingAsync({ uri, format: "pcm" });
     this.stream = stream;
   }
 
+  /** Stops and returns the file's URI. */
   async stop(): Promise<string> {
     const stream = this.stream;
     this.stream = null;
     if (!stream) throw new Error("not recording");
     const file = await stream.stopFileRecordingAsync();
     stream.stop();
-    const base64 = await readAsStringAsync(file.uri, { encoding: "base64" });
-    await this.prune();
-    return base64;
+    return file.uri;
   }
 
   async cancel(): Promise<void> {
@@ -63,50 +62,73 @@ class PcmRecorder {
     stream.stop();
     if (file) await deleteAsync(file.uri, { idempotent: true });
   }
+}
 
-  private async prune(): Promise<void> {
-    const names = await readDirectoryAsync(RECORDINGS_DIR);
-    await Promise.all(recordingsToDelete(names).map((name) => deleteAsync(`${RECORDINGS_DIR}${name}`, { idempotent: true })));
+// Questions are kept (the newest ten) for SC-12.
+class AskRecorder {
+  private readonly stream = new PcmStream();
+  private name: string | null = null;
+
+  async start(): Promise<void> {
+    const target = await newRecordingUri(Date.now());
+    await this.stream.start(target.uri);
+    this.name = target.name;
+  }
+
+  async stop(): Promise<{ audio: string; name: string }> {
+    const uri = await this.stream.stop();
+    const name = this.name!;
+    this.name = null;
+    const audio = await readAsStringAsync(uri, { encoding: "base64" });
+    await pruneRecordings();
+    return { audio, name };
+  }
+
+  async cancel(): Promise<void> {
+    this.name = null;
+    await this.stream.cancel();
   }
 }
 
-class PositionTracker {
-  private fixes: Fix[] = [];
-  private subscription: Location.LocationSubscription | null = null;
+function toFix(p: Location.LocationObject): Fix {
+  return { latitude: p.coords.latitude, longitude: p.coords.longitude, timestamp: p.timestamp, accuracy: p.coords.accuracy ?? null };
+}
 
-  begin(): void {
-    this.fixes = [];
-    void Location.getLastKnownPositionAsync().then((p) => p && this.add(p));
-    void Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 }, (p) => this.add(p))
-      .then((s) => { this.subscription = s; })
-      .catch(() => undefined);
-  }
-
-  end(): { current: Fix | null; fixes: Fix[] } {
-    this.subscription?.remove();
-    this.subscription = null;
-    const fixes = [...this.fixes].sort((a, b) => a.timestamp - b.timestamp);
-    return { current: fixes.length > 0 ? fixes[fixes.length - 1] : null, fixes };
-  }
-
-  private add(p: Location.LocationObject): void {
-    this.fixes.push({ latitude: p.coords.latitude, longitude: p.coords.longitude, timestamp: p.timestamp });
-  }
+function createPositionTracker(): PositionTracker {
+  return new PositionTracker({
+    now: () => Date.now(),
+    lastKnown: async () => {
+      const p = await Location.getLastKnownPositionAsync();
+      return p ? toFix(p) : null;
+    },
+    watch: (onFix) =>
+      Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 0 }, (p) => onFix(toFix(p))),
+  });
 }
 
 export function createRuntimeDeps(options: {
   settings(): Settings;
   apiKey(): string | null;
   onState(state: FlowState): void;
-}): { deps: Deps; dispose(): void } {
+}): {
+  deps: Deps;
+  trialDeps(onState: (state: TrialState) => void): TrialDeps;
+  playRecording(name: string): Promise<void>;
+  stopPlayback(): void;
+  dispose(): void;
+} {
   // setAudioModeAsync also calls setSpeakerphoneOn(), which pins this app's output to the phone speaker and keeps
   // answers off the intercom; clear that right after (releaseSco clears the communication device and the mode).
   void setAudioModeAsync({ shouldPlayInBackground: true, playsInSilentMode: true, interruptionMode: "mixWithOthers" }).then(() =>
     AudioRoute.releaseSco(),
   );
-  const recorder = new PcmRecorder();
-  const positions = new PositionTracker();
+  const recorder = new AskRecorder();
+  const positions = createPositionTracker();
   const playback: { stop: (() => void) | null } = { stop: null };
+  const clipDeps = { create: (uri: string) => createAudioPlayer({ uri }) as unknown as ClipPlayer, sleep: (ms: number) => RideService.sleep(ms) };
+  // SC-12 has its own handle, so stopping its playback never stops an answer and an answer never takes over its stop.
+  const checkPlayback: { stop: (() => void) | null } = { stop: null };
+  const stopCheckPlayback = () => checkPlayback.stop?.();
   let routeSource: Source | null = null;
 
   const deps: Deps = {
@@ -114,6 +136,13 @@ export function createRuntimeDeps(options: {
     sleep: (ms) => RideService.sleep(ms),
     settings: options.settings,
     micAllowed: async () => (await getRecordingPermissionsAsync()).granted,
+    mediaVolume: () => {
+      try {
+        return AudioRoute.getMediaVolume();
+      } catch {
+        return null;
+      }
+    },
     apiKey: () => (API_BASE_URL ? options.apiKey() : null),
     api: (apiKey, userName) =>
       new ApiClient({ baseUrl: API_BASE_URL, apiKey, userName, sleep: (ms) => RideService.sleep(ms), timer: (ms) => RideService.sleep(ms) }),
@@ -130,8 +159,15 @@ export function createRuntimeDeps(options: {
         else await AudioRoute.releaseSco();
         routeSource = null;
       },
+      inputDevice: () => AudioRoute.activeInputDevice(),
     },
     recorder,
+    recordings: {
+      saved: (meta) => { void saveMeta(meta).catch((e) => console.log(JSON.stringify({ event: "meta_failed", error: String(e) }))); },
+      transcribed: (name, transcript) => {
+        void setTranscript(name, transcript).catch((e) => console.log(JSON.stringify({ event: "meta_failed", error: String(e) })));
+      },
+    },
     location: positions,
     service: { start: () => RideService.startService(), stop: () => RideService.stopService() },
     nav: { returnTo: (packageName) => RideService.launchApp(packageName) },
@@ -142,8 +178,7 @@ export function createRuntimeDeps(options: {
       failure: () => { console.log(JSON.stringify({ event: "cue", cue: "failure", ok: RideService.playTone("error", 1200, "music") })); },
     },
     player: {
-      play: (urls) =>
-        playClips(urls, { create: (uri) => createAudioPlayer({ uri }) as unknown as ClipPlayer, sleep: (ms) => RideService.sleep(ms) }, playback),
+      play: (urls) => playClips(urls, clipDeps, playback),
       stop: () => playback.stop?.(),
     },
     speech: {
@@ -159,5 +194,26 @@ export function createRuntimeDeps(options: {
     },
     log: (event, data) => { console.log(JSON.stringify({ event, ...data })); },
   };
-  return { deps, dispose: () => { positions.end(); playback.stop?.(); } };
+  // SC-12 plays WAV copies; expo-audio cannot play the raw PCM that is kept and sent.
+  const playPcm = async (pcmUri: string, wavName: string) => playClips([await wavFromPcm(pcmUri, wavName)], clipDeps, checkPlayback);
+  const trialStream = new PcmStream();
+  const trialDeps = (onState: (state: TrialState) => void): TrialDeps => ({
+    now: deps.now,
+    sleep: deps.sleep,
+    micAllowed: deps.micAllowed,
+    route: { start: () => deps.route.start("screen"), stop: () => deps.route.stop(), inputDevice: deps.route.inputDevice },
+    recorder: { start: () => trialStream.start(`${cacheDirectory}trial.pcm`), stop: () => trialStream.stop(), cancel: () => trialStream.cancel() },
+    cueStart: deps.cues.start,
+    play: (uri) => playPcm(uri, "trial.wav"),
+    stopPlayback: stopCheckPlayback,
+    discard: (uri) => deleteAsync(uri, { idempotent: true }),
+    onState,
+  });
+  return {
+    deps,
+    trialDeps,
+    playRecording: (name) => playPcm(recordingUri(name), "recording.wav"),
+    stopPlayback: stopCheckPlayback,
+    dispose: () => { positions.end(); playback.stop?.(); stopCheckPlayback(); },
+  };
 }

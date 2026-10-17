@@ -3,15 +3,16 @@ import { Settings } from "../../settings/store";
 import { AskApi, AskController, Deps, RECORD_LIMIT_MS } from "../controller";
 import { ConversationState } from "../conversation";
 import { FlowState } from "../flow";
+import { RecordingMeta } from "../recordings";
 
 const MAPS = { packageName: "maps", label: "マップ" };
-const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [] };
+const SETTINGS: Settings = { userName: "rider01", returnEnabled: true, returnApp: MAPS, returnTiming: "sent", recentApps: [], answerVolumeDb: 6 };
 const ACCEPTED: AskAccepted = { askId: "a1", conversationId: "c1", conversationExpiresAt: "2999-01-01T00:00:00.000Z" };
 const done = (over: Partial<AskResult> = {}): AskResult => ({
   askId: "a1", status: "completed", transcript: "Q", answer: "愛鷹山です。", audio: [{ seq: 1, url: "https://audio/1.mp3" }], error: null, timings: {}, ...over,
 });
-const HERE = { latitude: 35.6812, longitude: 139.7671, timestamp: 100_000 };
-const BEHIND = { latitude: 35.6806, longitude: 139.7671, timestamp: 90_000 };
+const HERE = { latitude: 35.6812, longitude: 139.7671, timestamp: 100_000, accuracy: 5 };
+const BEHIND = { latitude: 35.6806, longitude: 139.7671, timestamp: 90_000, accuracy: 5 };
 
 type Options = {
   apiKey?: string | null;
@@ -23,12 +24,16 @@ type Options = {
   stopAfterMs?: number | null;
   micAllowed?: boolean;
   sayGate?: Promise<void>;
+  serviceError?: Error;
+  device?: { type: "bluetooth" | "builtin" | "other"; name: string } | null;
 };
 
 function harness(options: Options = {}) {
   const log: string[] = [];
   const states: FlowState[] = [];
   const bodies: AskBody[] = [];
+  const metas: RecordingMeta[] = [];
+  const transcripts: [string, string][] = [];
   let now = 0;
   const results = [...(options.results ?? [done()])];
   let controller!: AskController;
@@ -45,12 +50,22 @@ function harness(options: Options = {}) {
     settings: () => options.settings ?? SETTINGS,
     apiKey: () => (options.apiKey === undefined ? "key" : options.apiKey),
     micAllowed: async () => options.micAllowed ?? true,
+    mediaVolume: () => { log.push("vol:read"); return { current: 2, max: 25 }; },
     api: () => api,
     conversation: new ConversationState(),
-    route: { start: async (source) => { log.push(`route:${source}`); return options.routeOk ?? true; }, stop: async () => { log.push("route:stop"); } },
-    recorder: { start: async () => { log.push("rec:start"); }, stop: async () => { log.push("rec:stop"); return "UENN"; }, cancel: async () => { log.push("rec:cancel"); } },
+    route: {
+      start: async (source) => { log.push(`route:${source}`); return options.routeOk ?? true; },
+      stop: async () => { log.push("route:stop"); },
+      inputDevice: () => (options.device === undefined ? { type: "bluetooth", name: "M1-S PRO" } : options.device),
+    },
+    recorder: {
+      start: async () => { log.push("rec:start"); },
+      stop: async () => { log.push("rec:stop"); return { audio: "UENN", name: "rec-0.pcm" }; },
+      cancel: async () => { log.push("rec:cancel"); },
+    },
+    recordings: { saved: (meta) => { metas.push(meta); }, transcribed: (name, text) => { transcripts.push([name, text]); } },
     location: { begin: () => { log.push("loc:begin"); }, end: () => ({ current: HERE, fixes: [BEHIND, HERE] }) },
-    service: { start: () => { log.push("svc:start"); }, stop: () => { log.push("svc:stop"); } },
+    service: { start: () => { log.push("svc:start"); if (options.serviceError) throw options.serviceError; }, stop: () => { log.push("svc:stop"); } },
     nav: { returnTo: async (pkg) => { log.push(`return:${pkg}`); return true; } },
     cues: { start: () => log.push("cue:start"), sent: () => log.push("cue:sent"), waiting: () => log.push("cue:waiting"), failure: () => log.push("cue:failure") },
     player: { play: async (urls) => { log.push(`play:${urls.join(",")}`); if (options.playError) throw options.playError; }, stop: () => { log.push("play:stop"); } },
@@ -59,17 +74,18 @@ function harness(options: Options = {}) {
     log: () => undefined,
   };
   controller = new AskController(deps);
-  return { controller, log, states, bodies, deps, now: () => now };
+  return { controller, log, states, bodies, metas, transcripts, deps, now: () => now };
 }
 
 test("handsfree happy path returns to nav right after sending", async () => {
   const h = harness({ stopAfterMs: 3000 });
   await h.controller.run("handsfree");
   expect(h.log).toEqual([
-    "svc:start", "loc:begin", "route:handsfree", "rec:start", "cue:start", "rec:stop", "route:stop",
+    "vol:read", "svc:start", "loc:begin", "route:handsfree", "rec:start", "cue:start", "rec:stop", "route:stop",
     "post", "cue:sent", "return:maps", "get", "play:https://audio/1.mp3", "svc:stop",
   ]);
   expect(h.bodies[0]).toEqual({
+    volumeDb: 6,
     audio: "UENN",
     location: { latitude: 35.6812, longitude: 139.7671 },
     headingSample: { latitude: 35.6806, longitude: 139.7671, at: new Date(90_000).toISOString() },
@@ -119,7 +135,7 @@ test("phone mic is flagged when the intercom route fails", async () => {
 test("no key fails with a spoken message and no recording", async () => {
   const h = harness({ apiKey: null });
   await h.controller.run("handsfree");
-  expect(h.log).toEqual(["cue:failure", "say:接続キーを確かめてください。", "return:maps"]);
+  expect(h.log).toEqual(["vol:read", "cue:failure", "say:接続キーを確かめてください。", "return:maps"]);
 });
 
 test("network failure on send", async () => {
@@ -273,4 +289,85 @@ test("an old failure does not act on the next ask", async () => {
   const returns = h.log.map((l, i) => [l, i] as const).filter(([l]) => l === "return:maps");
   expect(returns).toHaveLength(1);
   expect(returns[0][1]).toBeGreaterThan(h.log.lastIndexOf("post"));
+});
+
+test("the chosen answer volume goes with every question", async () => {
+  const h = harness({ stopAfterMs: 1000, settings: { ...SETTINGS, answerVolumeDb: 3 } });
+  await h.controller.run("handsfree");
+  expect(h.bodies[0].volumeDb).toBe(3);
+});
+
+test("a foreground service that cannot start fails out loud", async () => {
+  const h = harness({ serviceError: new Error("ForegroundServiceStartNotAllowedException") });
+  await h.controller.run("handsfree");
+  expect(h.log).toEqual([
+    "vol:read", "svc:start", "cue:failure", "say:準備できなかったため、質問できませんでした。もう一度お試しください。", "return:maps",
+  ]);
+  expect(h.states.some((s) => s.phase === "failed" && s.failure === "service")).toBe(true);
+  expect(h.controller.state.phase).toBe("idle");
+});
+
+test("the kept recording is described for SC-12", async () => {
+  const h = harness({ stopAfterMs: 3000 });
+  await h.controller.run("handsfree");
+  // "UENN" is 3 bytes of PCM.
+  expect(h.metas).toEqual([
+    { name: "rec-0.pcm", recordedAt: 0, durationMs: 0, phoneMic: false, device: { type: "bluetooth", name: "M1-S PRO" }, transcript: null },
+  ]);
+  expect(h.transcripts).toEqual([["rec-0.pcm", "Q"]]);
+});
+
+test("a phone-mic recording is marked so", async () => {
+  const h = harness({ stopAfterMs: 1000, routeOk: false, device: { type: "builtin", name: "Pixel" } });
+  await h.controller.run("handsfree");
+  expect(h.metas[0]).toMatchObject({ phoneMic: true, device: { type: "builtin", name: "Pixel" } });
+});
+
+test("what was heard is kept even when the answer fails", async () => {
+  const h = harness({ stopAfterMs: 1000, results: [done({ status: "failed", transcript: "", answer: null, audio: [], error: "no_speech" })] });
+  await h.controller.run("handsfree");
+  expect(h.transcripts).toEqual([["rec-0.pcm", ""]]);
+});
+
+test("the answer waits until the busy message has been said", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const h = harness({ stopAfterMs: 1000, sayGate: gate, results: [done({ status: "processing" }), done()] });
+  const running = h.controller.run("handsfree");
+  while (h.controller.state.phase !== "waiting") await Promise.resolve();
+  h.controller.press();
+  // The answer arrives while "いま応答中です…" is still being said.
+  for (let i = 0; i < 50; i += 1) await Promise.resolve();
+  expect(h.log.some((l) => l.startsWith("play:"))).toBe(false);
+  release();
+  await running;
+  const busy = h.log.indexOf("say:いま応答中です。少し待ってからもう一度お話しください。");
+  expect(busy).toBeGreaterThan(-1);
+  expect(h.log.indexOf("play:https://audio/1.mp3")).toBeGreaterThan(busy);
+});
+
+test("a press while the answer is read out says nothing over it", async () => {
+  let endPlay!: () => void;
+  const h = harness({ stopAfterMs: 1000 });
+  h.deps.player.play = async (urls) => {
+    h.log.push(`play:${urls.join(",")}`);
+    await new Promise<void>((r) => { endPlay = r; });
+  };
+  const running = h.controller.run("handsfree");
+  while (h.controller.state.phase !== "speaking" || !endPlay) await Promise.resolve();
+  h.controller.press();
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  endPlay();
+  await running;
+  expect(h.log.some((l) => l.startsWith("say:"))).toBe(false);
+  expect(h.log.filter((l) => l === "rec:start")).toHaveLength(1);
+});
+
+test("the media volume is read before the intercom route takes over", async () => {
+  // While SCO is up, the music stream reports the call device's volume instead.
+  const h = harness({ stopAfterMs: 1000 });
+  await h.controller.run("handsfree");
+  expect(h.log.indexOf("vol:read")).toBeGreaterThan(-1);
+  expect(h.log.indexOf("vol:read")).toBeLessThan(h.log.indexOf("route:handsfree"));
+  expect(h.states[0]).toMatchObject({ phase: "recording", mediaVolume: { current: 2, max: 25 } });
 });
