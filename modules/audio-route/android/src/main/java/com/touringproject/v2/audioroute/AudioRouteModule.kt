@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
@@ -86,8 +87,11 @@ class AudioRouteModule : Module() {
       audioManager.mode = AudioManager.MODE_NORMAL
     }.runOnQueue(Queues.MAIN)
 
-    // Answers and cues play on the media stream; the intercom follows the phone's media volume.
+    // Answers and cues play on the media stream; the intercom follows the phone's media volume. While media still
+    // routes to the intercom's call link (SCO, which lingers after an ask), STREAM_MUSIC reports that link's volume
+    // instead, so the reading is withheld (null).
     Function("getMediaVolume") {
+      if (mediaOnCallRoute()) return@Function null
       mapOf(
         "current" to audioManager.getStreamVolume(AudioManager.STREAM_MUSIC),
         "max" to audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
@@ -105,6 +109,14 @@ class AudioRouteModule : Module() {
       }
       mapOf("type" to type, "name" to device.productName.toString())
     }
+  }
+
+  private fun mediaOnCallRoute(): Boolean {
+    val am = audioManager
+    if (am.mode == AudioManager.MODE_IN_COMMUNICATION || am.mode == AudioManager.MODE_IN_CALL) return true
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+    val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).build()
+    return am.getAudioDevicesForAttributes(media).any { it.type == SCO_TYPE }
   }
 
   // ---------------- intercom button: voice recognition ----------------

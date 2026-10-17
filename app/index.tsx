@@ -5,20 +5,23 @@ import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import AudioRoute, { MediaVolume } from "../modules/audio-route/src";
 import { useAsk } from "../src/ask/AskProvider";
 import { conversationLabel } from "../src/ui/conversationLabel";
-import { Banner, BANNER_TEXT, homeBanner, volumeWarning } from "../src/ui/homeBanner";
+import { Banner, BANNER_TEXT, homeBanner, nextVolume, volumeReadable, volumeWarning } from "../src/ui/homeBanner";
 
 const VOLUME_CHECK_MS = 2_000;
 
 // The rider may turn the volume down at any time; check while the home screen is in front (foreground-only timer).
-function useMediaVolume(): MediaVolume | null {
+// The ask screen covers home without taking its focus, so reading stops while an ask holds the route and resumes
+// at once when it ends; otherwise a call-device reading would linger on home after the ask.
+function useMediaVolume(readable: boolean): MediaVolume | null {
   const [volume, setVolume] = useState<MediaVolume | null>(null);
   useFocusEffect(
     useCallback(() => {
-      const read = () => setVolume(AudioRoute.getMediaVolume());
+      if (!readable) return undefined;
+      const read = () => setVolume((prev) => nextVolume(prev, AudioRoute.getMediaVolume()));
       read();
       const id = setInterval(read, VOLUME_CHECK_MS);
       return () => clearInterval(id);
-    }, []),
+    }, [readable]),
   );
   return volume;
 }
@@ -30,8 +33,8 @@ const BANNER_TARGET: Record<Banner, "/settings/connection" | "/settings/return-a
 };
 
 export default function Home() {
-  const { ready, controller, settings, apiKey, conversationExpiresAt, volumeDismissedAt, dismissVolumeWarning } = useAsk();
-  const volume = useMediaVolume();
+  const { ready, state, controller, settings, apiKey, conversationExpiresAt, volumeDismissedAt, dismissVolumeWarning } = useAsk();
+  const volume = useMediaVolume(volumeReadable(state.phase));
   if (!ready || !settings || !controller) return <View style={styles.root}><Text>準備中…</Text></View>;
 
   const confirmNewConversation = () =>

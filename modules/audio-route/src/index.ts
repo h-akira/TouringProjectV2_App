@@ -11,7 +11,8 @@ declare class AudioRouteModule extends NativeModule<Events> {
   stopVoiceRecognition(reason: string): Promise<void>;
   acquireSco(timeoutMs: number): Promise<RouteResult>;
   releaseSco(): Promise<void>;
-  getMediaVolume(): MediaVolume;
+  // null while media still routes to the intercom's call link (the music stream then reports that link's volume).
+  getMediaVolume(): MediaVolume | null;
   activeInputDevice(): InputDevice | null;
 }
 
